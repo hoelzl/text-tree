@@ -158,7 +158,6 @@ class DialogueGraph:
         if graph_data:
             if isinstance(graph_data, dict) and 'nodes' in graph_data and 'links' in graph_data:
                  try:
-                     # *** Removed the attrs argument ***
                      self.graph = nx.node_link_graph(graph_data, directed=True, multigraph=False)
                  except Exception as e:
                       print(f"Error loading graph from data: {e}. Initializing empty graph.")
@@ -380,8 +379,24 @@ initial_roots = initial_dg.get_root_nodes()
 initial_start_node_id = initial_roots[0] if initial_roots else None
 initial_path = [initial_start_node_id] if initial_start_node_id else []
 
+# --- Updated Stylesheet ---
 default_stylesheet = [
-    {'selector': 'node', 'style': {'label': 'data(label)', 'background-color': '#ccc', 'shape': 'round-rectangle', 'width': 'label', 'height': 'label', 'padding': '10px', 'text-wrap': 'wrap', 'text-max-width': '80px'}},
+    {
+        'selector': 'node',
+        'style': {
+            'label': 'data(label)',
+            'background-color': '#ccc',
+            'shape': 'round-rectangle',
+            'width': 'label',
+            'height': 'label',
+            'padding': '10px',
+            'text-wrap': 'wrap',
+            'text-max-width': '80px',
+            # --- Added text alignment ---
+            'text-valign': 'center',
+            'text-halign': 'center'
+        }
+    },
     {'selector': 'edge', 'style': {'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'label': 'data(label)', 'font-size': '10px', 'text-rotation': 'autorotate'}},
     {'selector': '.choice-node', 'style': {'background-color': '#ffcc00', 'shape': 'diamond'}},
     {'selector': '.player-node', 'style': {'background-color': '#e0f0ff'}},
@@ -480,7 +495,7 @@ app.layout = html.Div([
                         'padding': 10},
                 style={'width': '100%', 'height': '850px', 'border': '1px solid black'},
                 elements=networkx_to_cytoscape(initial_dg, initial_start_node_id),
-                stylesheet=default_stylesheet
+                stylesheet=default_stylesheet # Use updated stylesheet
             )
         ], style={'width': '48%', 'display': 'inline-block', 'verticalAlign': 'top'}) # End Right Panel
 
