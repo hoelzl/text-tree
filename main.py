@@ -6,10 +6,11 @@ import uuid
 import enum
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Union, Tuple
-from datetime import datetime
-import json # For serializing complex objects in node attributes if needed
+# Updated datetime import for timezone handling
+from datetime import datetime, timezone, UTC # Use UTC alias if Python >= 3.11, else timezone.utc
+import json
 
-# --- Data Classes and DialogueGraph (from dialogue_node_classes_nx_v1) ---
+# --- Data Classes and DialogueGraph ---
 
 @dataclass
 class Speaker:
@@ -25,7 +26,7 @@ class SpecificSpeaker(Speaker):
     @classmethod
     def from_dict(cls, data):
         if data and data.get('type') == 'specific':
-            return cls(name=data['name'])
+            return cls(name=data.get('name', 'Unknown Specific')) # Handle missing name
         return None
 
 
@@ -38,7 +39,7 @@ class GenericSpeaker(Speaker):
     @classmethod
     def from_dict(cls, data):
         if data and data.get('type') == 'generic':
-            return cls(identifier=data['identifier'])
+            return cls(identifier=data.get('identifier', 'Unknown Generic')) # Handle missing identifier
         return None
 
 def speaker_from_dict(data):
@@ -48,9 +49,18 @@ def speaker_from_dict(data):
             return SpecificSpeaker.from_dict(data)
         elif data.get('type') == 'generic':
             return GenericSpeaker.from_dict(data)
-    elif isinstance(data, Speaker):
+    elif isinstance(data, Speaker): # Handle case where it might already be an object
         return data
-    return None
+    return None # Return None if type is missing or 'none'
+
+def get_speaker_details(speaker: Optional[Speaker]) -> Tuple[str, str]:
+    """Extracts type ('none', 'generic', 'specific') and name/id from speaker object."""
+    if isinstance(speaker, SpecificSpeaker):
+        return 'specific', speaker.name
+    elif isinstance(speaker, GenericSpeaker):
+        return 'generic', speaker.identifier
+    else:
+        return 'none', ''
 
 class NodeType(enum.Enum):
     NPC_LINE = "NPC_LINE"
@@ -59,9 +69,11 @@ class NodeType(enum.Enum):
 @dataclass
 class TextVersion:
     text: str
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    # Use timezone-aware UTC time
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC)) # Use UTC alias or timezone.utc
     source: str = "manual"
     metadata: Optional[Dict[str, Any]] = None
+
     def to_dict(self):
         return {
             'text': self.text,
@@ -71,10 +83,13 @@ class TextVersion:
         }
     @classmethod
     def from_dict(cls, data):
+        # Handle potential missing timestamp gracefully
+        ts_str = data.get('timestamp')
+        timestamp = datetime.fromisoformat(ts_str) if ts_str else datetime.now(UTC)
         return cls(
-            text=data['text'],
-            timestamp=datetime.fromisoformat(data['timestamp']),
-            source=data['source'],
+            text=data.get('text', ''), # Handle missing text
+            timestamp=timestamp,
+            source=data.get('source', 'unknown'), # Handle missing source
             metadata=data.get('metadata')
         )
 
@@ -112,14 +127,19 @@ class DialogueNode:
     def from_dict(cls, node_id: str, data: Dict[str, Any]) -> 'DialogueNode':
         try:
              node_type_val = data.get("node_type")
-             node_type = NodeType(node_type_val) if node_type_val else NodeType.NPC_LINE
+             # Handle case where node_type_val might be None or invalid
+             try:
+                 node_type = NodeType(node_type_val) if node_type_val else NodeType.NPC_LINE
+             except ValueError:
+                 print(f"Warning: Invalid node type '{node_type_val}' for node {node_id}. Defaulting to NPC_LINE.")
+                 node_type = NodeType.NPC_LINE
+
              speaker_data = data.get("speaker")
              speaker = speaker_from_dict(speaker_data)
              history_data = data.get("text_history", [])
-             # Ensure history_data is a list before iterating
-             if not isinstance(history_data, list):
-                  history_data = []
+             if not isinstance(history_data, list): history_data = []
              text_history = [TextVersion.from_dict(th_data) for th_data in history_data]
+
              return cls(
                  node_id=node_id,
                  node_type=node_type,
@@ -130,16 +150,15 @@ class DialogueNode:
              )
         except Exception as e:
              print(f"Error reconstructing DialogueNode {node_id} from dict: {e}")
-             # Provide a more informative error node
              return cls(node_id=node_id, text_history=[TextVersion(text=f"Error loading node data: {e}", source="error")])
 
 
 class DialogueGraph:
     def __init__(self, graph_data=None):
         if graph_data:
-            # Ensure data is valid before attempting to load
             if isinstance(graph_data, dict) and 'nodes' in graph_data and 'links' in graph_data:
                  try:
+                     # *** Removed the attrs argument ***
                      self.graph = nx.node_link_graph(graph_data, directed=True, multigraph=False)
                  except Exception as e:
                       print(f"Error loading graph from data: {e}. Initializing empty graph.")
@@ -151,19 +170,18 @@ class DialogueGraph:
             self.graph = nx.DiGraph()
 
     def to_dict(self):
-        # Ensure graph exists before trying to serialize
-        return nx.node_link_data(self.graph) if self.graph else {'nodes': [], 'links': []}
+        # Specify edges="links" for serialization compatibility
+        return nx.node_link_data(self.graph, edges="links") if self.graph else {'nodes': [], 'links': []}
 
     def add_node(self, node_data: DialogueNode):
-        if not self.graph: self.graph = nx.DiGraph() # Ensure graph exists
+        if not self.graph: self.graph = nx.DiGraph()
         if node_data.node_id in self.graph:
             print(f"Warning: Node {node_data.node_id} already exists. Updating attributes.")
         self.graph.add_node(node_data.node_id, **node_data.to_dict())
 
     def get_node_data(self, node_id: str) -> Optional[DialogueNode]:
-        if not self.graph or node_id not in self.graph: return None # Check graph exists
+        if not self.graph or node_id not in self.graph: return None
         try:
-            # Check if node data exists before accessing
             node_attrs = self.graph.nodes.get(node_id)
             if node_attrs is None:
                  print(f"Warning: Node {node_id} found in graph but has no attributes.")
@@ -174,15 +192,16 @@ class DialogueGraph:
             return None
 
     def update_node_data(self, node_data: DialogueNode):
-        if not self.graph or node_data.node_id not in self.graph: # Check graph exists
+        if not self.graph or node_data.node_id not in self.graph:
              raise ValueError(f"Node {node_data.node_id} does not exist in the graph.")
         node_attrs = node_data.to_dict()
-        # Update attributes safely
-        nx.set_node_attributes(self.graph, {node_data.node_id: node_attrs})
+        # Update attributes for the specific node
+        for key, value in node_attrs.items():
+             self.graph.nodes[node_data.node_id][key] = value
 
 
     def add_edge(self, parent_id: str, child_id: str, **kwargs) -> bool:
-        if not self.graph: self.graph = nx.DiGraph() # Ensure graph exists
+        if not self.graph: self.graph = nx.DiGraph()
         if parent_id not in self.graph or child_id not in self.graph:
             print(f"Error: Node {parent_id} or {child_id} not in graph.")
             return False
@@ -192,10 +211,9 @@ class DialogueGraph:
         self.graph.add_edge(parent_id, child_id, **kwargs)
         return True
 
-    # --- Added remove_edge method ---
     def remove_edge(self, parent_id: str, child_id: str):
          """Removes an edge between two nodes if it exists."""
-         if not self.graph: return # Check graph exists
+         if not self.graph: return
          if self.graph.has_edge(parent_id, child_id):
              self.graph.remove_edge(parent_id, child_id)
              print(f"Removed edge {parent_id} -> {child_id}")
@@ -203,24 +221,24 @@ class DialogueGraph:
               print(f"Warning: Edge {parent_id} -> {child_id} does not exist.")
 
     def get_children(self, node_id: str) -> List[str]:
-        if not self.graph or node_id not in self.graph: return [] # Check graph exists
+        if not self.graph or node_id not in self.graph: return []
         return list(self.graph.successors(node_id))
 
     def get_parents(self, node_id: str) -> List[str]:
-        if not self.graph or node_id not in self.graph: return [] # Check graph exists
+        if not self.graph or node_id not in self.graph: return []
         return list(self.graph.predecessors(node_id))
 
     def get_siblings(self, node_id: str) -> List[str]:
         siblings = set()
-        parents = self.get_parents(node_id) # Checks graph existence
+        parents = self.get_parents(node_id)
         if not parents: return []
         first_parent = parents[0]
-        for child in self.get_children(first_parent): # Checks graph existence
+        for child in self.get_children(first_parent):
             if child != node_id: siblings.add(child)
         return list(siblings)
 
     def get_path(self, start_id: str, end_id: str) -> Optional[List[str]]:
-        if not self.graph or start_id not in self.graph or end_id not in self.graph: return None # Check graph exists
+        if not self.graph or start_id not in self.graph or end_id not in self.graph: return None
         try:
             return nx.shortest_path(self.graph, source=start_id, target=end_id)
         except (nx.NetworkXNoPath, nx.NodeNotFound):
@@ -232,7 +250,7 @@ class DialogueGraph:
 
     def is_reachable(self, start_id: str, end_id: str) -> bool:
         """Checks if end_id is reachable from start_id using NetworkX."""
-        if not self.graph or start_id not in self.graph or end_id not in self.graph: # Check graph exists
+        if not self.graph or start_id not in self.graph or end_id not in self.graph:
             return False
         if start_id == end_id:
             return True
@@ -242,10 +260,10 @@ class DialogueGraph:
             return False
 
     def get_all_node_ids(self) -> List[str]:
-        return list(self.graph.nodes) if self.graph else [] # Check graph exists
+        return list(self.graph.nodes) if self.graph else []
 
     def get_root_nodes(self) -> List[str]:
-        return [node for node, degree in self.graph.in_degree() if degree == 0] if self.graph else [] # Check graph exists
+        return [node for node, degree in self.graph.in_degree() if degree == 0] if self.graph else []
 
 # --- Helper Functions ---
 
@@ -302,7 +320,6 @@ def build_chat_history_display(dg: DialogueGraph, path: List[str]) -> List[html.
             speaker_name = str(node_data.speaker) if node_data.speaker else "Narrator"
             text = node_data.current_text or "[No text]"
             style = {'padding': '8px', 'margin': '4px 0', 'borderRadius': '5px', 'maxWidth': '80%'}
-            # Use global player variable defined later in __main__
             if isinstance(node_data.speaker, GenericSpeaker) and node_data.speaker.identifier == player.identifier:
                  style.update({'backgroundColor': '#e0f0ff', 'marginLeft': 'auto', 'textAlign': 'right'})
             else:
@@ -371,35 +388,66 @@ default_stylesheet = [
     {'selector': '.npc-node', 'style': {'background-color': '#f0f0f0'}},
 ]
 
-
 # --- App Layout ---
 app.layout = html.Div([
-    html.H1("Dialogue DAG Editor (Dash + NetworkX + Cytoscape)"),
+    html.H1("Dialogue DAG Editor"),
 
     # Stores
     dcc.Store(id='graph-store', data=initial_dg.to_dict()),
     dcc.Store(id='current-node-store', data=initial_start_node_id),
     dcc.Store(id='current-path-store', data=initial_path),
     dcc.Store(id='status-message-store', data="Graph loaded."),
+    dcc.Store(id='editor-original-state-store', data={}),
 
     html.Div([ # Main container
         # Left Panel
         html.Div([
             html.H3("Dialogue Flow"),
-            html.Div(id='chat-history-display', style={'height': '300px', 'overflowY': 'scroll', 'border': '1px solid #ccc', 'marginBottom': '10px', 'padding': '5px'}), # Reduced height
+            html.Div(id='chat-history-display', style={'height': '300px', 'overflowY': 'scroll', 'border': '1px solid #ccc', 'marginBottom': '10px', 'padding': '5px'}),
 
-            html.H4("Current Node Info"),
-            html.Pre(id='current-node-info', style={'border': '1px solid #eee', 'padding': '5px', 'minHeight': '50px', 'whiteSpace': 'pre-wrap', 'marginBottom': '10px'}),
+            # --- Node Editor Section ---
+            html.H3("Node Editor"),
+            html.Div(id='node-editor-area', children=[
+                html.Strong("Node ID: "), html.Span(id='editor-node-id', children="N/A"),
+                html.Hr(),
+                html.Label("Node Type:"),
+                dcc.Dropdown(
+                    id='editor-node-type',
+                    options=[{'label': nt.name, 'value': nt.value} for nt in NodeType],
+                    style={'marginBottom': '10px'},
+                    clearable=False,
+                    disabled=True
+                ),
+                html.Label("Speaker Type:"),
+                dcc.Dropdown(
+                    id='editor-speaker-type',
+                    options=[
+                        {'label': 'None', 'value': 'none'},
+                        {'label': 'Generic', 'value': 'generic'},
+                        {'label': 'Specific', 'value': 'specific'}
+                    ],
+                    value='none',
+                    style={'marginBottom': '5px'},
+                    clearable=False,
+                    disabled=True
+                ),
+                html.Label("Speaker Name/ID:"),
+                dcc.Input(
+                    id='editor-speaker-name',
+                    type='text',
+                    style={'width': '98%', 'marginBottom': '10px'},
+                    disabled=True
+                ),
+                html.Label("Node Text:"),
+                dcc.Textarea(
+                    id='editor-node-text',
+                    style={'width': '100%', 'height': 80, 'marginBottom': '5px'},
+                    disabled=True
+                ),
+                html.Button('Save Node Changes', id='save-node-changes-btn', n_clicks=0, disabled=True, style={'marginTop': '10px', 'marginBottom': '15px'}),
+            ], style={'border': '1px solid #eee', 'padding': '10px', 'marginBottom': '15px'}),
+            # --- End Node Editor Section ---
 
-            # --- Edit Area ---
-            html.H4("Edit Node Text"),
-            dcc.Textarea(
-                id='edit-node-textarea',
-                style={'width': '100%', 'height': 80, 'marginBottom': '5px'},
-                disabled=True # Disabled initially
-            ),
-            html.Button('Save Text Edit', id='save-edit-btn', n_clicks=0, disabled=True, style={'marginBottom': '15px'}),
-            # --- End Edit Area ---
 
             html.Div(id='choice-button-container', style={'marginBottom': '10px'}),
 
@@ -413,11 +461,9 @@ app.layout = html.Div([
             dcc.Dropdown(id='link-child-dropdown', placeholder="Select node to link as child...", style={'display': 'inline-block', 'width': '250px', 'marginRight': '5px', 'verticalAlign': 'middle'}),
             html.Button('Link Selected Child', id='link-child-btn', n_clicks=0, style={'verticalAlign': 'middle'}),
 
-            # --- Remove Child Area ---
             html.H4("Manage Children", style={'marginTop': '15px'}),
             dcc.Dropdown(id='remove-child-dropdown', placeholder="Select child to remove...", style={'display': 'inline-block', 'width': '250px', 'marginRight': '5px', 'verticalAlign': 'middle'}),
             html.Button('Remove Selected Child', id='remove-child-btn', n_clicks=0, style={'verticalAlign': 'middle'}),
-            # --- End Remove Child Area ---
 
             html.Div(id='status-display', style={'marginTop': '15px', 'color': 'grey'}),
 
@@ -432,7 +478,7 @@ app.layout = html.Div([
                         'roots': f'[id = "{initial_start_node_id}"]' if initial_start_node_id else None,
                         'directed': True,
                         'padding': 10},
-                style={'width': '100%', 'height': '750px', 'border': '1px solid black'}, # Increased height
+                style={'width': '100%', 'height': '850px', 'border': '1px solid black'},
                 elements=networkx_to_cytoscape(initial_dg, initial_start_node_id),
                 stylesheet=default_stylesheet
             )
@@ -444,11 +490,208 @@ app.layout = html.Div([
 
 # --- Callbacks ---
 
-# Combined callback to update UI elements based on current state
+# Callback to update editor fields and store original state when node changes
 @callback(
-    # Existing Outputs
+    Output('editor-node-id', 'children'),
+    Output('editor-node-type', 'value'),
+    Output('editor-node-type', 'disabled'),
+    Output('editor-speaker-type', 'value'),
+    Output('editor-speaker-type', 'disabled'),
+    Output('editor-speaker-name', 'value'),
+    Output('editor-speaker-name', 'disabled'),
+    Output('editor-node-text', 'value'),
+    Output('editor-node-text', 'disabled'),
+    Output('editor-original-state-store', 'data'), # Store original values
+    Output('save-node-changes-btn', 'disabled'), # Disable save initially
+    Input('current-node-store', 'data'),
+    State('graph-store', 'data'),
+    prevent_initial_call=True
+)
+def update_editor_area(current_node_id, graph_data):
+    if not current_node_id or not graph_data:
+        original_state = {}
+        return "N/A", None, True, 'none', True, "", True, "", True, original_state, True
+
+    dg = DialogueGraph(graph_data)
+    node_data = dg.get_node_data(current_node_id)
+
+    if not node_data:
+        original_state = {}
+        return current_node_id[:8]+" (Error)", None, True, 'none', True, "", True, "", True, original_state, True
+
+    is_choice_node = node_data.node_type == NodeType.PLAYER_CHOICE
+    can_edit_text = not is_choice_node
+    can_edit_speaker = not is_choice_node
+    can_edit_type = True
+
+    speaker_type, speaker_name = get_speaker_details(node_data.speaker)
+    current_text = node_data.current_text or ""
+
+    original_state = {
+        'node_type': node_data.node_type.value,
+        'speaker_type': speaker_type,
+        'speaker_name': speaker_name,
+        'text': current_text
+    }
+
+    return (
+        current_node_id,
+        node_data.node_type.value,
+        not can_edit_type,
+        speaker_type,
+        not can_edit_speaker,
+        speaker_name,
+        speaker_type == 'none' or not can_edit_speaker,
+        current_text,
+        not can_edit_text,
+        original_state,
+        True # Disable save button initially
+    )
+
+
+# Callback to enable/disable the Save Node Changes button based on modifications
+@callback(
+    Output('save-node-changes-btn', 'disabled', allow_duplicate=True),
+    Input('editor-node-type', 'value'),
+    Input('editor-speaker-type', 'value'),
+    Input('editor-speaker-name', 'value'),
+    Input('editor-node-text', 'value'),
+    State('editor-original-state-store', 'data'),
+    State('current-node-store', 'data'),
+    prevent_initial_call=True
+)
+def toggle_save_node_changes_button(new_type, new_speaker_type, new_speaker_name, new_text, original_state, current_node_id):
+    if not current_node_id or not original_state:
+        return True
+
+    type_changed = new_type != original_state.get('node_type')
+    speaker_type_changed = new_speaker_type != original_state.get('speaker_type')
+
+    # Compare speaker name carefully based on type
+    original_speaker_name = original_state.get('speaker_name', '')
+    current_speaker_name = new_speaker_name if new_speaker_type != 'none' else ''
+    speaker_name_changed = (new_speaker_type != 'none' and current_speaker_name != original_speaker_name)
+
+    speaker_became_not_none = (original_state.get('speaker_type') == 'none' and new_speaker_type != 'none')
+    speaker_became_none = (original_state.get('speaker_type') != 'none' and new_speaker_type == 'none')
+
+    text_changed = new_text != original_state.get('text')
+
+    # Enable button if any relevant field has changed
+    enable_button = type_changed or speaker_type_changed or speaker_name_changed or speaker_became_not_none or speaker_became_none or text_changed
+    return not enable_button
+
+
+# Callback to handle saving node changes
+@callback(
+    Output('graph-store', 'data', allow_duplicate=True),
+    Output('status-message-store', 'data', allow_duplicate=True),
+    Output('save-node-changes-btn', 'disabled', allow_duplicate=True),
+    Output('editor-original-state-store', 'data', allow_duplicate=True),
+    Input('save-node-changes-btn', 'n_clicks'),
+    State('graph-store', 'data'),
+    State('current-node-store', 'data'),
+    State('editor-node-type', 'value'),
+    State('editor-speaker-type', 'value'),
+    State('editor-speaker-name', 'value'),
+    State('editor-node-text', 'value'),
+    prevent_initial_call=True
+)
+def save_node_changes(n_clicks, graph_data, current_node_id, node_type_val, speaker_type, speaker_name, node_text):
+    if not n_clicks or not current_node_id or not graph_data:
+        return no_update, "Save Error: Invalid state.", True, no_update
+
+    dg = DialogueGraph(graph_data)
+    node_data = dg.get_node_data(current_node_id)
+    if not node_data:
+        return no_update, f"Save Error: Node {current_node_id} not found.", True, no_update
+
+    changes_made = False # Flag to track if actual changes occurred
+
+    # 1. Update Node Type
+    try:
+        new_node_type = NodeType(node_type_val)
+        if node_data.node_type != new_node_type:
+            node_data.node_type = new_node_type
+            changes_made = True
+            # If changed to PLAYER_CHOICE, clear speaker
+            if new_node_type == NodeType.PLAYER_CHOICE:
+                if node_data.speaker is not None:
+                     node_data.speaker = None
+                     # Speaker change counts as a change, flag already set
+    except ValueError:
+        return no_update, f"Save Error: Invalid node type '{node_type_val}'.", False, no_update
+
+    # 2. Update Speaker
+    new_speaker: Optional[Speaker] = None
+    current_speaker_type, current_speaker_name = get_speaker_details(node_data.speaker)
+    speaker_changed = False
+
+    if speaker_type == 'generic':
+        identifier = speaker_name.strip() if speaker_name else "Default Generic"
+        if current_speaker_type != 'generic' or current_speaker_name != identifier:
+            new_speaker = GenericSpeaker(identifier=identifier)
+            speaker_changed = True
+        else:
+            new_speaker = node_data.speaker # No change
+    elif speaker_type == 'specific':
+        name = speaker_name.strip() if speaker_name else "Default Specific"
+        if current_speaker_type != 'specific' or current_speaker_name != name:
+            new_speaker = SpecificSpeaker(name=name)
+            speaker_changed = True
+        else:
+            new_speaker = node_data.speaker # No change
+    else: # speaker_type == 'none'
+        if current_speaker_type != 'none':
+            new_speaker = None
+            speaker_changed = True
+        else:
+            new_speaker = node_data.speaker # No change
+
+    if speaker_changed and node_data.node_type != NodeType.PLAYER_CHOICE:
+        node_data.speaker = new_speaker
+        changes_made = True
+    elif node_data.node_type == NodeType.PLAYER_CHOICE and node_data.speaker is not None:
+        # Ensure speaker is None if type is PLAYER_CHOICE (might have been set before type change)
+        node_data.speaker = None
+        changes_made = True # This counts as a change if speaker wasn't None
+
+
+    # 3. Update Text (only if changed and node type allows text)
+    original_text = node_data.current_text
+    text_changed = False
+    if node_data.node_type != NodeType.PLAYER_CHOICE and node_text != original_text:
+        node_data.set_current_text(node_text, source="manual_edit")
+        changes_made = True
+        text_changed = True # Specifically track text change for status
+
+    # --- Save changes back to graph ---
+    if changes_made:
+        dg.update_node_data(node_data)
+        status_msg = f"Node {current_node_id[:6]} updated successfully."
+        if text_changed:
+            status_msg += " (New text version created)"
+
+        # --- Update original state store to reflect saved changes ---
+        saved_speaker_type, saved_speaker_name = get_speaker_details(node_data.speaker)
+        new_original_state = {
+            'node_type': node_data.node_type.value,
+            'speaker_type': saved_speaker_type,
+            'speaker_name': saved_speaker_name,
+            'text': node_data.current_text or ""
+        }
+        return dg.to_dict(), status_msg, True, new_original_state # Disable save button, update original state
+    else:
+        # No actual changes were made compared to the node's current state
+        status_msg = "No changes detected to save."
+        # Don't update graph, keep save button disabled, don't update original state
+        return no_update, status_msg, True, no_update
+
+
+# Combined callback to update UI elements based on current state (Main Update)
+@callback(
+    # Outputs for non-editor parts
     Output('chat-history-display', 'children'),
-    Output('current-node-info', 'children'),
     Output('choice-button-container', 'children'),
     Output('prev-sibling-btn', 'disabled'),
     Output('next-sibling-btn', 'disabled'),
@@ -458,38 +701,31 @@ app.layout = html.Div([
     Output('link-child-dropdown', 'value'),
     Output('link-child-btn', 'disabled'),
     Output('status-display', 'children'),
-    # New Outputs for Edit/Remove
-    Output('edit-node-textarea', 'value'),
-    Output('edit-node-textarea', 'disabled'),
-    Output('save-edit-btn', 'disabled'),
     Output('remove-child-dropdown', 'options'),
     Output('remove-child-dropdown', 'value'),
     Output('remove-child-btn', 'disabled'),
-    # Inputs
+    # Inputs triggering the update
     Input('current-node-store', 'data'),
     Input('current-path-store', 'data'),
-    Input('graph-store', 'data'),
+    Input('graph-store', 'data'), # Trigger on graph changes too
     State('status-message-store', 'data')
 )
-def update_main_ui(current_node_id, current_path, graph_data, status_msg):
-    # Default values for outputs in case of error
+def update_main_display_ui(current_node_id, current_path, graph_data, status_msg):
+    # This callback now focuses only on display elements *outside* the editor
+    # The editor itself is updated by `update_editor_area`
+
     default_outputs = {
-        'chat-history-display': ["No node selected."],
-        'current-node-info': "N/A",
+        'chat-history-display': [html.P("No node selected or history unavailable.")],
         'choice-button-container': [],
         'prev-sibling-btn': True, 'next-sibling-btn': True, 'go-up-btn': True,
         'add-child-btn': True,
         'link-child-dropdown-opts': [], 'link-child-dropdown-val': None, 'link-child-btn': True,
         'status-display': "Error: Invalid state.",
-        'edit-textarea-val': "", 'edit-textarea-disabled': True, 'save-edit-btn': True,
         'remove-child-opts': [], 'remove-child-val': None, 'remove-child-btn': True
     }
-    # Helper function to return all outputs
     def make_output(updates):
-        # Order must match the Output list
         return (
             updates.get('chat-history-display', default_outputs['chat-history-display']),
-            updates.get('current-node-info', default_outputs['current-node-info']),
             updates.get('choice-button-container', default_outputs['choice-button-container']),
             updates.get('prev-sibling-btn', default_outputs['prev-sibling-btn']),
             updates.get('next-sibling-btn', default_outputs['next-sibling-btn']),
@@ -499,9 +735,6 @@ def update_main_ui(current_node_id, current_path, graph_data, status_msg):
             updates.get('link-child-dropdown-val', default_outputs['link-child-dropdown-val']),
             updates.get('link-child-btn', default_outputs['link-child-btn']),
             updates.get('status-display', default_outputs['status-display']),
-            updates.get('edit-textarea-val', default_outputs['edit-textarea-val']),
-            updates.get('edit-textarea-disabled', default_outputs['edit-textarea-disabled']),
-            updates.get('save-edit-btn', default_outputs['save-edit-btn']),
             updates.get('remove-child-opts', default_outputs['remove-child-opts']),
             updates.get('remove-child-val', default_outputs['remove-child-val']),
             updates.get('remove-child-btn', default_outputs['remove-child-btn'])
@@ -510,45 +743,20 @@ def update_main_ui(current_node_id, current_path, graph_data, status_msg):
     if not current_node_id or not graph_data:
         dg_check = DialogueGraph(graph_data)
         roots_check = dg_check.get_root_nodes()
-        if roots_check:
-             current_node_id = roots_check[0]
-             current_path = [current_node_id]
-             status_msg = "Resetting to root node."
-        else:
+        if not roots_check:
              return make_output({'status-display': "Error: Invalid state or empty graph."})
-
+        # If graph exists but node is bad, editor callback will handle display
 
     dg = DialogueGraph(graph_data)
     current_node = dg.get_node_data(current_node_id)
 
     if not current_node:
-         roots = dg.get_root_nodes()
-         if roots:
-             current_node_id = roots[0]
-             current_path = [current_node_id]
-             current_node = dg.get_node_data(current_node_id)
-             status_msg = f"Error: Node not found, reset to root {current_node_id[:6]}."
-             if not current_node:
-                  return make_output({'status-display': "Fatal Error: Cannot load root node."})
-         else:
-              return make_output({'status-display': "Error: Cannot find valid node."})
+         return make_output({'status-display': f"Error: Selected node {current_node_id[:6]} data not found."})
 
-    # --- Calculate UI values ---
-    outputs = {} # Dictionary to hold calculated outputs
+    outputs = {}
 
-    # 1. Chat History
     outputs['chat-history-display'] = build_chat_history_display(dg, current_path)
 
-    # 2. Node Info
-    node_info_text = f"ID: {current_node.node_id}\nType: {current_node.node_type.name}\n"
-    if current_node.speaker: node_info_text += f"Speaker: {current_node.speaker}\n"
-    # Add text history count
-    node_info_text += f"Text Versions: {len(current_node.text_history)}\n"
-    if current_node.current_text: node_info_text += f"\nCurrent Text: {current_node.current_text}"
-    elif current_node.node_type == NodeType.PLAYER_CHOICE: node_info_text += "Player makes a choice."
-    outputs['current-node-info'] = node_info_text
-
-    # 3. Choice Buttons
     choice_buttons = []
     if current_node.node_type == NodeType.PLAYER_CHOICE:
         children = dg.get_children(current_node_id)
@@ -560,7 +768,6 @@ def update_main_ui(current_node_id, current_path, graph_data, status_msg):
             choice_buttons.append(html.Button(choice_text, id={'type': 'choice-btn', 'index': child_id}, n_clicks=0, style={'marginRight': '5px', 'marginBottom': '5px'}))
     outputs['choice-button-container'] = choice_buttons
 
-    # 4. Button States (Navigation)
     parents = dg.get_parents(current_node_id)
     outputs['go-up-btn'] = not bool(parents)
     can_go_prev = False
@@ -576,13 +783,9 @@ def update_main_ui(current_node_id, current_path, graph_data, status_msg):
     outputs['prev-sibling-btn'] = not can_go_prev
     outputs['next-sibling-btn'] = not can_go_next
 
-    # 5. Button States (Actions) & Dropdowns
-    # Disable editing/adding/linking/removing from PLAYER_CHOICE nodes
     is_choice_node = current_node.node_type == NodeType.PLAYER_CHOICE
     outputs['add-child-btn'] = is_choice_node
     outputs['link-child-btn'] = is_choice_node
-    outputs['edit-textarea-disabled'] = is_choice_node or not current_node.current_text # Disable if no text
-    outputs['save-edit-btn'] = is_choice_node or not current_node.current_text
 
     all_nodes = dg.get_all_node_ids()
     outputs['link-child-dropdown-opts'] = [{'label': f"{nid[:6]}... ({dg.get_node_data(nid).current_text[:15] if dg.get_node_data(nid) and dg.get_node_data(nid).current_text else 'Choice/Empty'}...)", 'value': nid}
@@ -593,12 +796,8 @@ def update_main_ui(current_node_id, current_path, graph_data, status_msg):
     outputs['remove-child-opts'] = [{'label': f"{cid[:6]}... ({dg.get_node_data(cid).current_text[:15] if dg.get_node_data(cid) and dg.get_node_data(cid).current_text else 'Choice/Empty'}...)", 'value': cid}
                                      for cid in current_children]
     outputs['remove-child-val'] = None
-    outputs['remove-child-btn'] = not bool(current_children) # Disable if no children
+    outputs['remove-child-btn'] = not bool(current_children)
 
-    # 6. Edit Text Area Value
-    outputs['edit-textarea-val'] = current_node.current_text if not is_choice_node and current_node.current_text else ""
-
-    # 7. Status Display
     outputs['status-display'] = status_msg
 
     return make_output(outputs)
@@ -775,7 +974,7 @@ def add_new_child(n_clicks, graph_data, current_node_id):
         status_msg = f"Added new child node {new_node.node_id[:6]}."
         return dg.to_dict(), status_msg
     else:
-        if new_node.node_id in dg.graph: dg.graph.remove_node(new_node.node_id)
+        if new_node.node_id in dg.graph: dg.graph.remove_node(new_node.node_id) # Clean up node
         return no_update, "Error adding edge for new child."
 
 
@@ -807,47 +1006,15 @@ def link_existing_child(n_clicks, graph_data, current_node_id, child_to_link_id)
     else:
         return no_update, f"Failed to link {child_to_link_id[:6]}. Check for cycles."
 
-# --- Callback for Saving Text Edit ---
-@callback(
-    Output('graph-store', 'data', allow_duplicate=True),
-    Output('status-message-store', 'data', allow_duplicate=True),
-    Input('save-edit-btn', 'n_clicks'),
-    State('graph-store', 'data'),
-    State('current-node-store', 'data'),
-    State('edit-node-textarea', 'value'), # Get text from textarea
-    prevent_initial_call=True
-)
-def save_node_text_edit(n_clicks, graph_data, current_node_id, edited_text):
-    if not n_clicks or not graph_data or not current_node_id:
-        return no_update, "Error: Cannot save edit."
-    if edited_text is None: # Check if text is None
-         return no_update, "Error: Edited text is empty."
 
-    dg = DialogueGraph(graph_data)
-    node_data = dg.get_node_data(current_node_id)
-
-    if not node_data:
-        return no_update, f"Error: Node {current_node_id} not found."
-    if node_data.node_type == NodeType.PLAYER_CHOICE:
-         return no_update, "Cannot edit text of a PLAYER_CHOICE node."
-
-    # Add new text version
-    node_data.set_current_text(edited_text, source="manual_edit")
-
-    # Update node data in the graph
-    dg.update_node_data(node_data)
-
-    status_msg = f"Saved text edit for node {current_node_id[:6]}."
-    return dg.to_dict(), status_msg
-
-# --- Callback for Removing Selected Child ---
+# Callback for Removing Selected Child
 @callback(
     Output('graph-store', 'data', allow_duplicate=True),
     Output('status-message-store', 'data', allow_duplicate=True),
     Input('remove-child-btn', 'n_clicks'),
     State('graph-store', 'data'),
     State('current-node-store', 'data'),
-    State('remove-child-dropdown', 'value'), # Get selected child ID
+    State('remove-child-dropdown', 'value'),
     prevent_initial_call=True
 )
 def remove_selected_child(n_clicks, graph_data, current_node_id, child_to_remove_id):
@@ -855,12 +1022,8 @@ def remove_selected_child(n_clicks, graph_data, current_node_id, child_to_remove
         return no_update, "Error: Missing information to remove child."
 
     dg = DialogueGraph(graph_data)
-
-    # Use the DialogueGraph method to remove the edge
     dg.remove_edge(current_node_id, child_to_remove_id)
-
     status_msg = f"Removed child link: {current_node_id[:6]} -> {child_to_remove_id[:6]}."
-    # Return the modified graph data
     return dg.to_dict(), status_msg
 
 
