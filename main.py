@@ -155,7 +155,8 @@ class DialogueGraph:
         if graph_data:
             if isinstance(graph_data, dict) and 'nodes' in graph_data and 'links' in graph_data:
                  try:
-                     self.graph = nx.node_link_graph(graph_data, directed=True, multigraph=False)
+                     # *** Explicitly specify edges="links" for deserialization ***
+                     self.graph = nx.node_link_graph(graph_data, directed=True, multigraph=False, edges="links")
                  except Exception as e:
                       print(f"Error loading graph from data: {e}. Initializing empty graph.")
                       self.graph = nx.DiGraph()
@@ -166,6 +167,7 @@ class DialogueGraph:
             self.graph = nx.DiGraph()
 
     def to_dict(self):
+        # Specify edges="links" for serialization compatibility
         return nx.node_link_data(self.graph, edges="links") if self.graph else {'nodes': [], 'links': []}
 
     def add_node(self, node_data: DialogueNode):
@@ -193,7 +195,6 @@ class DialogueGraph:
         for key, value in node_attrs.items():
              self.graph.nodes[node_data.node_id][key] = value
 
-    # --- Added remove_node method ---
     def remove_node(self, node_id: str):
          """Removes a node and all incident edges."""
          if not self.graph: return
@@ -243,15 +244,17 @@ class DialogueGraph:
     def get_path(self, start_id: str, end_id: str) -> Optional[List[str]]:
         if not self.graph or start_id not in self.graph or end_id not in self.graph: return None
         try:
-            # Prefer shortest path for history display
             return nx.shortest_path(self.graph, source=start_id, target=end_id)
         except (nx.NetworkXNoPath, nx.NodeNotFound):
-            # Fallback for potentially disconnected graphs if shortest fails
             try:
+                 # Try finding *any* simple path as fallback
                  paths = list(nx.all_simple_paths(self.graph, source=start_id, target=end_id))
                  return paths[0] if paths else None
             except (nx.NetworkXNoPath, nx.NodeNotFound):
-                 return None
+                 # Check if start and end are the same (path of length 0)
+                 if start_id == end_id:
+                     return [start_id]
+                 return None # Truly no path found
 
     def is_reachable(self, start_id: str, end_id: str) -> bool:
         """Checks if end_id is reachable from start_id using NetworkX."""
@@ -428,7 +431,6 @@ app.layout = html.Div([
             html.H3("Node Editor"),
             html.Div(id='node-editor-area', children=[
                 html.Strong("Node ID: "), html.Span(id='editor-node-id', children="N/A"),
-                # --- Added Delete Node Button ---
                 html.Button('Delete This Node', id='delete-node-btn', n_clicks=0, style={'float': 'right', 'color': 'red', 'borderColor': 'red'}),
                 html.Hr(),
                 html.Label("Node Type:"),
@@ -495,10 +497,12 @@ app.layout = html.Div([
             html.H3("Graph Visualization"),
             cyto.Cytoscape(
                 id='cytoscape-graph',
-                # Removed explicit roots - let layout handle forests
-                layout={'name': 'breadthfirst', # Or 'cose' for potentially better disconnected layout
+                # *** Adjusted layout parameters for spacing ***
+                layout={'name': 'breadthfirst',
                         'directed': True,
-                        'padding': 10},
+                        'padding': 10,
+                        'spacingFactor': 1.0 # Reduced spacing factor (default 1.75)
+                       },
                 style={'width': '100%', 'height': '850px', 'border': '1px solid black'},
                 elements=networkx_to_cytoscape(initial_dg, initial_start_node_id),
                 stylesheet=default_stylesheet
@@ -530,18 +534,16 @@ app.layout = html.Div([
     prevent_initial_call=True
 )
 def update_editor_area(current_node_id, graph_data):
-    # Default state if no node is selected or graph is empty
     if not current_node_id or not graph_data:
         original_state = {}
-        return "N/A", None, True, 'none', True, "", True, "", True, original_state, True, True # Disable delete
+        return "N/A", None, True, 'none', True, "", True, "", True, original_state, True, True
 
     dg = DialogueGraph(graph_data)
     node_data = dg.get_node_data(current_node_id)
 
-    # Default state if node data cannot be loaded
     if not node_data:
         original_state = {}
-        return current_node_id[:8]+" (Error)", None, True, 'none', True, "", True, "", True, original_state, True, True # Disable delete
+        return current_node_id[:8]+" (Error)", None, True, 'none', True, "", True, "", True, original_state, True, True
 
     is_choice_node = node_data.node_type == NodeType.PLAYER_CHOICE
     can_edit_text = not is_choice_node
@@ -566,12 +568,12 @@ def update_editor_area(current_node_id, graph_data):
         speaker_type,
         not can_edit_speaker,
         speaker_name,
-        speaker_type == 'none' or not can_edit_speaker,
+        speaker_type == 'none' or not can_edit_speaker, # Disable name input if speaker type is None
         current_text,
         not can_edit_text,
         original_state,
-        True, # Disable save button initially
-        not can_delete # Delete button disabled state
+        True,
+        not can_delete
     )
 
 
@@ -594,13 +596,17 @@ def toggle_save_node_changes_button(new_type, new_speaker_type, new_speaker_name
     speaker_type_changed = new_speaker_type != original_state.get('speaker_type')
 
     original_speaker_name = original_state.get('speaker_name', '')
+    # Ensure new_speaker_name is treated as empty string if speaker type is none
     current_speaker_name = new_speaker_name if new_speaker_type != 'none' else ''
+    # Only compare names if the new type is not 'none'
     speaker_name_changed = (new_speaker_type != 'none' and current_speaker_name != original_speaker_name)
 
     speaker_became_not_none = (original_state.get('speaker_type') == 'none' and new_speaker_type != 'none')
     speaker_became_none = (original_state.get('speaker_type') != 'none' and new_speaker_type == 'none')
 
-    text_changed = new_text != original_state.get('text')
+    # Only compare text if the original type was not PLAYER_CHOICE
+    text_changed = (original_state.get('node_type') != NodeType.PLAYER_CHOICE.value and
+                    new_text != original_state.get('text'))
 
     enable_button = type_changed or speaker_type_changed or speaker_name_changed or speaker_became_not_none or speaker_became_none or text_changed
     return not enable_button
@@ -678,6 +684,7 @@ def save_node_changes(n_clicks, graph_data, current_node_id, node_type_val, spea
     # 3. Update Text
     original_text = node_data.current_text
     text_changed = False
+    # Only add new text version if text actually changed and it's not a choice node
     if node_data.node_type != NodeType.PLAYER_CHOICE and node_text != original_text:
         node_data.set_current_text(node_text, source="manual_edit")
         changes_made = True
@@ -709,7 +716,7 @@ def save_node_changes(n_clicks, graph_data, current_node_id, node_type_val, spea
     Output('prev-sibling-btn', 'disabled'),
     Output('next-sibling-btn', 'disabled'),
     Output('go-up-btn', 'disabled'),
-    Output('add-child-btn', 'disabled'),
+    Output('add-child-btn', 'disabled'), # Keep add child button state update here
     Output('link-child-dropdown', 'options'),
     Output('link-child-dropdown', 'value'),
     Output('link-child-btn', 'disabled'),
@@ -727,7 +734,7 @@ def update_main_display_ui(current_node_id, current_path, graph_data, status_msg
         'chat-history-display': [html.P("No node selected or history unavailable.")],
         'choice-button-container': [],
         'prev-sibling-btn': True, 'next-sibling-btn': True, 'go-up-btn': True,
-        'add-child-btn': True,
+        'add-child-btn': True, # Default to disabled
         'link-child-dropdown-opts': [], 'link-child-dropdown-val': None, 'link-child-btn': True,
         'status-display': "Error: Invalid state.",
         'remove-child-opts': [], 'remove-child-val': None, 'remove-child-btn': True
@@ -739,7 +746,7 @@ def update_main_display_ui(current_node_id, current_path, graph_data, status_msg
             updates.get('prev-sibling-btn', default_outputs['prev-sibling-btn']),
             updates.get('next-sibling-btn', default_outputs['next-sibling-btn']),
             updates.get('go-up-btn', default_outputs['go-up-btn']),
-            updates.get('add-child-btn', default_outputs['add-child-btn']),
+            updates.get('add-child-btn', default_outputs['add-child-btn']), # Get updated state
             updates.get('link-child-dropdown-opts', default_outputs['link-child-dropdown-opts']),
             updates.get('link-child-dropdown-val', default_outputs['link-child-dropdown-val']),
             updates.get('link-child-btn', default_outputs['link-child-btn']),
@@ -759,13 +766,10 @@ def update_main_display_ui(current_node_id, current_path, graph_data, status_msg
     current_node = dg.get_node_data(current_node_id)
 
     if not current_node:
-         # If current node is invalid, try selecting the first root
          roots = dg.get_root_nodes()
          if roots:
-             # This state change should trigger the editor update callback
-             # For this display callback, just return defaults for now
              return make_output({'status-display': f"Error: Node {current_node_id[:6]} not found. Try selecting a node."})
-         else: # No roots either
+         else:
              return make_output({'status-display': "Error: Graph is empty or invalid."})
 
 
@@ -798,9 +802,10 @@ def update_main_display_ui(current_node_id, current_path, graph_data, status_msg
     outputs['prev-sibling-btn'] = not can_go_prev
     outputs['next-sibling-btn'] = not can_go_next
 
-    is_choice_node = current_node.node_type == NodeType.PLAYER_CHOICE
-    outputs['add-child-btn'] = is_choice_node
-    outputs['link-child-btn'] = is_choice_node
+    # *** Allow adding child from PLAYER_CHOICE node ***
+    outputs['add-child-btn'] = False # Always enable add child button if a node is selected
+    # Disable linking *to* a choice node for now via this button
+    outputs['link-child-btn'] = current_node.node_type == NodeType.PLAYER_CHOICE
 
     all_nodes = dg.get_all_node_ids()
     outputs['link-child-dropdown-opts'] = [{'label': f"{nid[:6]}... ({dg.get_node_data(nid).current_text[:15] if dg.get_node_data(nid) and dg.get_node_data(nid).current_text else 'Choice/Empty'}...)", 'value': nid}
@@ -963,30 +968,34 @@ def handle_choice(n_clicks, current_path, graph_data):
 @callback(
     Output('graph-store', 'data', allow_duplicate=True),
     Output('status-message-store', 'data', allow_duplicate=True),
-    # --- Outputs to select the new node ---
     Output('current-node-store', 'data', allow_duplicate=True),
     Output('current-path-store', 'data', allow_duplicate=True),
-    # --- ---
     Input('add-child-btn', 'n_clicks'),
     State('graph-store', 'data'),
     State('current-node-store', 'data'),
-    State('current-path-store', 'data'), # Need current path to extend it
+    State('current-path-store', 'data'),
     prevent_initial_call=True
 )
 def add_new_child(n_clicks, graph_data, current_node_id, current_path):
     if not n_clicks or not graph_data or not current_node_id:
-        # Don't update node/path state if error occurs
         return no_update, "Error: Cannot add child.", no_update, no_update
 
     dg = DialogueGraph(graph_data)
     parent_node = dg.get_node_data(current_node_id)
     if not parent_node:
         return no_update, f"Error: Parent node {current_node_id} not found.", no_update, no_update
-    if parent_node.node_type == NodeType.PLAYER_CHOICE:
-        return no_update, "Cannot add standard child to PLAYER_CHOICE node.", no_update, no_update
 
-    new_speaker = SpecificSpeaker("New NPC") if parent_node.speaker != player else player
-    new_node = DialogueNode(node_type=NodeType.NPC_LINE, speaker=new_speaker)
+    # --- Determine defaults for new node ---
+    new_speaker = player # Default to player if parent is choice
+    new_node_type = NodeType.NPC_LINE # Default to NPC_LINE (representing player speech)
+
+    if parent_node.node_type != NodeType.PLAYER_CHOICE:
+        # If parent is NPC, maybe next is Player? Or keep same speaker? Let's alternate.
+        new_speaker = SpecificSpeaker("New NPC") if parent_node.speaker != player else player
+        new_node_type = NodeType.NPC_LINE
+
+    # --- Create and add node ---
+    new_node = DialogueNode(node_type=new_node_type, speaker=new_speaker)
     new_node.add_text_version(f"New node (child of {current_node_id[:6]})", source="placeholder")
 
     dg.add_node(new_node)
@@ -994,11 +1003,13 @@ def add_new_child(n_clicks, graph_data, current_node_id, current_path):
 
     if success:
         status_msg = f"Added new child node {new_node.node_id[:6]}."
-        # --- Update path and select new node ---
-        new_path = (current_path or []) + [new_node.node_id]
+        # Ensure current_path is a list before extending
+        new_path = (current_path if isinstance(current_path, list) else [current_node_id]) + [new_node.node_id]
         return dg.to_dict(), status_msg, new_node.node_id, new_path
     else:
-        if new_node.node_id in dg.graph: dg.graph.remove_node(new_node.node_id)
+        # Clean up node if edge addition failed
+        if new_node.node_id in dg.graph:
+             dg.graph.remove_node(new_node.node_id)
         return no_update, "Error adding edge for new child.", no_update, no_update
 
 
@@ -1019,8 +1030,9 @@ def link_existing_child(n_clicks, graph_data, current_node_id, child_to_link_id)
     dg = DialogueGraph(graph_data)
     parent_node = dg.get_node_data(current_node_id)
     if not parent_node: return no_update, f"Error: Parent node {current_node_id} not found."
-    if parent_node.node_type == NodeType.PLAYER_CHOICE:
-         return no_update, "Cannot link child to PLAYER_CHOICE node using this button."
+    # Allow linking from PLAYER_CHOICE node as well
+    # if parent_node.node_type == NodeType.PLAYER_CHOICE:
+    #      return no_update, "Cannot link child to PLAYER_CHOICE node using this button."
 
     success = dg.add_edge(current_node_id, child_to_link_id)
 
@@ -1031,7 +1043,7 @@ def link_existing_child(n_clicks, graph_data, current_node_id, child_to_link_id)
         return no_update, f"Failed to link {child_to_link_id[:6]}. Check for cycles."
 
 
-# Callback for Removing Selected Child
+# Callback for Removing Selected Child link
 @callback(
     Output('graph-store', 'data', allow_duplicate=True),
     Output('status-message-store', 'data', allow_duplicate=True),
@@ -1041,16 +1053,16 @@ def link_existing_child(n_clicks, graph_data, current_node_id, child_to_link_id)
     State('remove-child-dropdown', 'value'),
     prevent_initial_call=True
 )
-def remove_selected_child(n_clicks, graph_data, current_node_id, child_to_remove_id):
+def remove_selected_child_link(n_clicks, graph_data, current_node_id, child_to_remove_id):
     if not n_clicks or not graph_data or not current_node_id or not child_to_remove_id:
-        return no_update, "Error: Missing information to remove child."
+        return no_update, "Error: Missing information to remove child link."
 
     dg = DialogueGraph(graph_data)
     dg.remove_edge(current_node_id, child_to_remove_id)
     status_msg = f"Removed child link: {current_node_id[:6]} -> {child_to_remove_id[:6]}."
     return dg.to_dict(), status_msg
 
-# --- Callback for Deleting Selected Node ---
+# Callback for Deleting Selected Node
 @callback(
     Output('graph-store', 'data', allow_duplicate=True),
     Output('current-node-store', 'data', allow_duplicate=True),
@@ -1069,33 +1081,24 @@ def delete_selected_node(n_clicks, graph_data, node_to_delete_id):
     if node_to_delete_id not in dg.graph:
          return no_update, no_update, no_update, f"Error: Node {node_to_delete_id} not found."
 
-    # Determine where to navigate after deletion
     parents = dg.get_parents(node_to_delete_id)
     new_selected_node = None
     new_path = []
     status_msg = f"Deleted node {node_to_delete_id[:6]}."
 
-    # Remove the node
     dg.remove_node(node_to_delete_id)
 
-    # Find new node to select
+    # Try selecting parent first
     if parents:
-        # Select the first parent if it still exists
         first_parent = parents[0]
         if first_parent in dg.graph:
              new_selected_node = first_parent
-             # Try to reconstruct path to parent
              roots = dg.get_root_nodes()
-             if roots:
-                 new_path = dg.get_path(roots[0], new_selected_node) or [new_selected_node]
+             if roots: new_path = dg.get_path(roots[0], new_selected_node) or [new_selected_node]
              else: new_path = [new_selected_node]
              status_msg += f" Selected parent {first_parent[:6]}."
-        else: # Parent was also deleted? (Shouldn't happen with remove_node)
-             pass # Fall through to selecting root
-    else: # Node was a root
-        pass # Fall through to selecting root
 
-    # If no parent was selected, try selecting another root node
+    # If no valid parent, select root
     if not new_selected_node:
         roots = dg.get_root_nodes()
         if roots:
@@ -1103,7 +1106,6 @@ def delete_selected_node(n_clicks, graph_data, node_to_delete_id):
             new_path = [new_selected_node]
             status_msg += f" Selected root {roots[0][:6]}."
         else:
-            # Graph is now empty
             status_msg += " Graph is now empty."
             new_selected_node = None
             new_path = []
@@ -1128,6 +1130,8 @@ def display_tap_node_data(node_data, graph_data):
     dg = DialogueGraph(graph_data)
     roots = dg.get_root_nodes()
     if not roots:
+         # If graph has no roots (e.g., after deleting the only root)
+         # Still select the node, path will just be the node itself
          status_msg = f"Selected node {clicked_node_id[:6]} (no root found)."
          return clicked_node_id, [clicked_node_id], status_msg
 
@@ -1138,7 +1142,8 @@ def display_tap_node_data(node_data, graph_data):
         status_msg = f"Selected node {clicked_node_id[:6]} from graph."
         return clicked_node_id, new_path, status_msg
     else:
-        # If no path from first root, just set path to the clicked node
+        # If no path from first root, node is likely in a disconnected component.
+        # Set path to just the clicked node.
         status_msg = f"Selected node {clicked_node_id[:6]} (path not found from root)."
         return clicked_node_id, [clicked_node_id], status_msg
 
