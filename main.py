@@ -155,7 +155,7 @@ class DialogueGraph:
         if graph_data:
             if isinstance(graph_data, dict) and 'nodes' in graph_data and 'links' in graph_data:
                  try:
-                     # *** Explicitly specify edges="links" for deserialization ***
+                     # Explicitly specify edges="links" for deserialization
                      self.graph = nx.node_link_graph(graph_data, directed=True, multigraph=False, edges="links")
                  except Exception as e:
                       print(f"Error loading graph from data: {e}. Initializing empty graph.")
@@ -247,14 +247,12 @@ class DialogueGraph:
             return nx.shortest_path(self.graph, source=start_id, target=end_id)
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             try:
-                 # Try finding *any* simple path as fallback
                  paths = list(nx.all_simple_paths(self.graph, source=start_id, target=end_id))
                  return paths[0] if paths else None
             except (nx.NetworkXNoPath, nx.NodeNotFound):
-                 # Check if start and end are the same (path of length 0)
                  if start_id == end_id:
                      return [start_id]
-                 return None # Truly no path found
+                 return None
 
     def is_reachable(self, start_id: str, end_id: str) -> bool:
         """Checks if end_id is reachable from start_id using NetworkX."""
@@ -433,34 +431,47 @@ app.layout = html.Div([
                 html.Strong("Node ID: "), html.Span(id='editor-node-id', children="N/A"),
                 html.Button('Delete This Node', id='delete-node-btn', n_clicks=0, style={'float': 'right', 'color': 'red', 'borderColor': 'red'}),
                 html.Hr(),
-                html.Label("Node Type:"),
-                dcc.Dropdown(
-                    id='editor-node-type',
-                    options=[{'label': nt.name, 'value': nt.value} for nt in NodeType],
-                    style={'marginBottom': '10px'},
-                    clearable=False,
-                    disabled=True
-                ),
-                html.Label("Speaker Type:"),
-                dcc.Dropdown(
-                    id='editor-speaker-type',
-                    options=[
-                        {'label': 'None', 'value': 'none'},
-                        {'label': 'Generic', 'value': 'generic'},
-                        {'label': 'Specific', 'value': 'specific'}
-                    ],
-                    value='none',
-                    style={'marginBottom': '5px'},
-                    clearable=False,
-                    disabled=True
-                ),
-                html.Label("Speaker Name/ID:"),
-                dcc.Input(
-                    id='editor-speaker-name',
-                    type='text',
-                    style={'width': '98%', 'marginBottom': '10px'},
-                    disabled=True
-                ),
+                # --- Row for Type, Speaker Type, Speaker Name ---
+                html.Div([
+                    # Node Type
+                    html.Div([
+                        html.Label("Node Type:", style={'display': 'block', 'marginBottom': '2px'}),
+                        dcc.Dropdown(
+                            id='editor-node-type',
+                            options=[{'label': nt.name, 'value': nt.value} for nt in NodeType],
+                            style={'width': '100%'}, # Adjust width as needed
+                            clearable=False,
+                            disabled=True
+                        )
+                    ], style={'flex': '1', 'marginRight': '10px'}), # Flex item
+                    # Speaker Type
+                    html.Div([
+                        html.Label("Speaker Type:", style={'display': 'block', 'marginBottom': '2px'}),
+                        dcc.Dropdown(
+                            id='editor-speaker-type',
+                            options=[
+                                {'label': 'None', 'value': 'none'},
+                                {'label': 'Generic', 'value': 'generic'},
+                                {'label': 'Specific', 'value': 'specific'}
+                            ],
+                            value='none',
+                            style={'width': '100%'},
+                            clearable=False,
+                            disabled=True
+                        )
+                    ], style={'flex': '1', 'marginRight': '10px'}), # Flex item
+                    # Speaker Name/ID
+                    html.Div([
+                        html.Label("Speaker Name/ID:", style={'display': 'block', 'marginBottom': '2px'}),
+                        dcc.Input(
+                            id='editor-speaker-name',
+                            type='text',
+                            style={'width': '100%'}, # Use 100% width within flex item
+                            disabled=True
+                        )
+                    ], style={'flex': '2'}), # Flex item (allow more space for name)
+                ], style={'display': 'flex', 'alignItems': 'flex-end', 'marginBottom': '10px'}), # Flex container for the row
+                # --- End Row ---
                 html.Label("Node Text:"),
                 dcc.Textarea(
                     id='editor-node-text',
@@ -486,7 +497,7 @@ app.layout = html.Div([
 
             html.H4("Manage Children", style={'marginTop': '15px'}),
             dcc.Dropdown(id='remove-child-dropdown', placeholder="Select child to remove...", style={'display': 'inline-block', 'width': '250px', 'marginRight': '5px', 'verticalAlign': 'middle'}),
-            html.Button('Remove Selected Child', id='remove-child-btn', n_clicks=0, style={'verticalAlign': 'middle'}),
+            html.Button('Remove Selected Child Link', id='remove-child-btn', n_clicks=0, style={'verticalAlign': 'middle'}), # Renamed button slightly
 
             html.Div(id='status-display', style={'marginTop': '15px', 'color': 'grey'}),
 
@@ -497,11 +508,10 @@ app.layout = html.Div([
             html.H3("Graph Visualization"),
             cyto.Cytoscape(
                 id='cytoscape-graph',
-                # *** Adjusted layout parameters for spacing ***
                 layout={'name': 'breadthfirst',
                         'directed': True,
                         'padding': 10,
-                        'spacingFactor': 1.0 # Reduced spacing factor (default 1.75)
+                        'spacingFactor': 1.0
                        },
                 style={'width': '100%', 'height': '850px', 'border': '1px solid black'},
                 elements=networkx_to_cytoscape(initial_dg, initial_start_node_id),
@@ -528,7 +538,7 @@ app.layout = html.Div([
     Output('editor-node-text', 'disabled'),
     Output('editor-original-state-store', 'data'),
     Output('save-node-changes-btn', 'disabled'),
-    Output('delete-node-btn', 'disabled'), # Enable/disable delete button
+    Output('delete-node-btn', 'disabled'),
     Input('current-node-store', 'data'),
     State('graph-store', 'data'),
     prevent_initial_call=True
@@ -549,7 +559,7 @@ def update_editor_area(current_node_id, graph_data):
     can_edit_text = not is_choice_node
     can_edit_speaker = not is_choice_node
     can_edit_type = True
-    can_delete = True # Allow deleting any selected node
+    can_delete = True
 
     speaker_type, speaker_name = get_speaker_details(node_data.speaker)
     current_text = node_data.current_text or ""
@@ -568,7 +578,7 @@ def update_editor_area(current_node_id, graph_data):
         speaker_type,
         not can_edit_speaker,
         speaker_name,
-        speaker_type == 'none' or not can_edit_speaker, # Disable name input if speaker type is None
+        speaker_type == 'none' or not can_edit_speaker,
         current_text,
         not can_edit_text,
         original_state,
@@ -596,15 +606,12 @@ def toggle_save_node_changes_button(new_type, new_speaker_type, new_speaker_name
     speaker_type_changed = new_speaker_type != original_state.get('speaker_type')
 
     original_speaker_name = original_state.get('speaker_name', '')
-    # Ensure new_speaker_name is treated as empty string if speaker type is none
     current_speaker_name = new_speaker_name if new_speaker_type != 'none' else ''
-    # Only compare names if the new type is not 'none'
     speaker_name_changed = (new_speaker_type != 'none' and current_speaker_name != original_speaker_name)
 
     speaker_became_not_none = (original_state.get('speaker_type') == 'none' and new_speaker_type != 'none')
     speaker_became_none = (original_state.get('speaker_type') != 'none' and new_speaker_type == 'none')
 
-    # Only compare text if the original type was not PLAYER_CHOICE
     text_changed = (original_state.get('node_type') != NodeType.PLAYER_CHOICE.value and
                     new_text != original_state.get('text'))
 
@@ -684,7 +691,6 @@ def save_node_changes(n_clicks, graph_data, current_node_id, node_type_val, spea
     # 3. Update Text
     original_text = node_data.current_text
     text_changed = False
-    # Only add new text version if text actually changed and it's not a choice node
     if node_data.node_type != NodeType.PLAYER_CHOICE and node_text != original_text:
         node_data.set_current_text(node_text, source="manual_edit")
         changes_made = True
@@ -716,7 +722,7 @@ def save_node_changes(n_clicks, graph_data, current_node_id, node_type_val, spea
     Output('prev-sibling-btn', 'disabled'),
     Output('next-sibling-btn', 'disabled'),
     Output('go-up-btn', 'disabled'),
-    Output('add-child-btn', 'disabled'), # Keep add child button state update here
+    Output('add-child-btn', 'disabled'),
     Output('link-child-dropdown', 'options'),
     Output('link-child-dropdown', 'value'),
     Output('link-child-btn', 'disabled'),
@@ -734,7 +740,7 @@ def update_main_display_ui(current_node_id, current_path, graph_data, status_msg
         'chat-history-display': [html.P("No node selected or history unavailable.")],
         'choice-button-container': [],
         'prev-sibling-btn': True, 'next-sibling-btn': True, 'go-up-btn': True,
-        'add-child-btn': True, # Default to disabled
+        'add-child-btn': True,
         'link-child-dropdown-opts': [], 'link-child-dropdown-val': None, 'link-child-btn': True,
         'status-display': "Error: Invalid state.",
         'remove-child-opts': [], 'remove-child-val': None, 'remove-child-btn': True
@@ -746,7 +752,7 @@ def update_main_display_ui(current_node_id, current_path, graph_data, status_msg
             updates.get('prev-sibling-btn', default_outputs['prev-sibling-btn']),
             updates.get('next-sibling-btn', default_outputs['next-sibling-btn']),
             updates.get('go-up-btn', default_outputs['go-up-btn']),
-            updates.get('add-child-btn', default_outputs['add-child-btn']), # Get updated state
+            updates.get('add-child-btn', default_outputs['add-child-btn']),
             updates.get('link-child-dropdown-opts', default_outputs['link-child-dropdown-opts']),
             updates.get('link-child-dropdown-val', default_outputs['link-child-dropdown-val']),
             updates.get('link-child-btn', default_outputs['link-child-btn']),
@@ -802,9 +808,9 @@ def update_main_display_ui(current_node_id, current_path, graph_data, status_msg
     outputs['prev-sibling-btn'] = not can_go_prev
     outputs['next-sibling-btn'] = not can_go_next
 
-    # *** Allow adding child from PLAYER_CHOICE node ***
-    outputs['add-child-btn'] = False # Always enable add child button if a node is selected
-    # Disable linking *to* a choice node for now via this button
+    # Enable Add Child always if a node is selected
+    outputs['add-child-btn'] = False
+    # Disable linking *from* a choice node for now
     outputs['link-child-btn'] = current_node.node_type == NodeType.PLAYER_CHOICE
 
     all_nodes = dg.get_all_node_ids()
@@ -986,11 +992,11 @@ def add_new_child(n_clicks, graph_data, current_node_id, current_path):
         return no_update, f"Error: Parent node {current_node_id} not found.", no_update, no_update
 
     # --- Determine defaults for new node ---
-    new_speaker = player # Default to player if parent is choice
-    new_node_type = NodeType.NPC_LINE # Default to NPC_LINE (representing player speech)
-
-    if parent_node.node_type != NodeType.PLAYER_CHOICE:
-        # If parent is NPC, maybe next is Player? Or keep same speaker? Let's alternate.
+    # If parent is PLAYER_CHOICE, new node is Player speaking
+    if parent_node.node_type == NodeType.PLAYER_CHOICE:
+        new_speaker = player
+        new_node_type = NodeType.NPC_LINE # Represent player line as NPC_LINE for now
+    else: # Alternate speaker otherwise
         new_speaker = SpecificSpeaker("New NPC") if parent_node.speaker != player else player
         new_node_type = NodeType.NPC_LINE
 
@@ -1003,11 +1009,9 @@ def add_new_child(n_clicks, graph_data, current_node_id, current_path):
 
     if success:
         status_msg = f"Added new child node {new_node.node_id[:6]}."
-        # Ensure current_path is a list before extending
         new_path = (current_path if isinstance(current_path, list) else [current_node_id]) + [new_node.node_id]
         return dg.to_dict(), status_msg, new_node.node_id, new_path
     else:
-        # Clean up node if edge addition failed
         if new_node.node_id in dg.graph:
              dg.graph.remove_node(new_node.node_id)
         return no_update, "Error adding edge for new child.", no_update, no_update
@@ -1031,8 +1035,6 @@ def link_existing_child(n_clicks, graph_data, current_node_id, child_to_link_id)
     parent_node = dg.get_node_data(current_node_id)
     if not parent_node: return no_update, f"Error: Parent node {current_node_id} not found."
     # Allow linking from PLAYER_CHOICE node as well
-    # if parent_node.node_type == NodeType.PLAYER_CHOICE:
-    #      return no_update, "Cannot link child to PLAYER_CHOICE node using this button."
 
     success = dg.add_edge(current_node_id, child_to_link_id)
 
@@ -1130,20 +1132,15 @@ def display_tap_node_data(node_data, graph_data):
     dg = DialogueGraph(graph_data)
     roots = dg.get_root_nodes()
     if not roots:
-         # If graph has no roots (e.g., after deleting the only root)
-         # Still select the node, path will just be the node itself
          status_msg = f"Selected node {clicked_node_id[:6]} (no root found)."
          return clicked_node_id, [clicked_node_id], status_msg
 
-    # Attempt to find path from the *first* root for history display consistency
     new_path = dg.get_path(roots[0], clicked_node_id)
 
     if new_path:
         status_msg = f"Selected node {clicked_node_id[:6]} from graph."
         return clicked_node_id, new_path, status_msg
     else:
-        # If no path from first root, node is likely in a disconnected component.
-        # Set path to just the clicked node.
         status_msg = f"Selected node {clicked_node_id[:6]} (path not found from root)."
         return clicked_node_id, [clicked_node_id], status_msg
 
