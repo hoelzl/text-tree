@@ -5,7 +5,13 @@ from dash import dcc, html, Input, Output, State, callback, ctx, no_update
 import dash_cytoscape as cyto
 import networkx as nx
 import uuid
+import enum
 from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime, timezone, UTC
+import json
+import base64
+import io
+import copy
 
 # --- Imports from local package modules ---
 from .data_models import (
@@ -19,16 +25,12 @@ from .commands import (
 from .command_manager import CommandManager
 
 # --- Initial Setup ---
-player = GenericSpeaker(identifier="Player") # Define player globally
+player = GenericSpeaker(identifier="Player")
 
-initial_dg = DialogueGraph() # Start with empty graph by default
-# Or load from a file if implementing persistence later
-# initial_dg = setup_initial_graph() # Can use helper for initial data
+initial_dg = DialogueGraph()
 
-# Setup initial state if graph is empty
 if not initial_dg.get_root_nodes():
      print("Graph is empty, setting up initial structure...")
-     # Add a root node if graph is empty
      root_node = DialogueNode(node_id="root", speaker=SpecificSpeaker("Narrator"))
      root_node.add_text_version("Start of the dialogue.")
      initial_dg.add_node(root_node)
@@ -37,13 +39,10 @@ initial_roots = initial_dg.get_root_nodes()
 initial_start_node_id = initial_roots[0] if initial_roots else None
 initial_path = [initial_start_node_id] if initial_start_node_id else []
 
-# Instantiate CommandManager
-command_manager = CommandManager(initial_dg)
+command_manager = CommandManager(DialogueGraph(initial_dg.to_dict()))
 
-# --- UI Helper Functions --- (Moved here from global scope)
-
+# --- UI Helper Functions ---
 def build_chat_history_display(dg: DialogueGraph, path: List[str]) -> List[html.Div]:
-    """Constructs Dash HTML components for chat history."""
     history_elements = []
     if not path: return [html.P("Dialogue history is empty.")]
     for node_id in path:
@@ -59,12 +58,11 @@ def build_chat_history_display(dg: DialogueGraph, path: List[str]) -> List[html.
     return history_elements
 
 def networkx_to_cytoscape(dg: DialogueGraph, current_node_id: Optional[str]) -> List[Dict[str, Any]]:
-    """Converts NetworkX graph to Cytoscape elements format."""
     elements = []
     if not dg or not dg.graph: return []
     for node_id in dg.graph.nodes:
         node_data = dg.get_node_data(node_id)
-        label, node_class = "[Error]", "npc-node" # Defaults
+        label, node_class = "[Error]", "npc-node"
         if node_data:
             if node_data.node_type == NodeType.PLAYER_CHOICE: label, node_class = "[CHOICE]", 'choice-node'
             elif node_data.current_text:
@@ -79,7 +77,7 @@ def networkx_to_cytoscape(dg: DialogueGraph, current_node_id: Optional[str]) -> 
 # --- Dash App Setup ---
 
 app = dash.Dash(__name__, suppress_callback_exceptions=True, title="Dialogue DAG Editor")
-server = app.server # Expose server for potential deployment
+server = app.server
 
 default_stylesheet = [
     {'selector': 'node', 'style': {'label': 'data(label)', 'background-color': '#ccc', 'shape': 'round-rectangle', 'width': 'label', 'height': 'label', 'padding': '10px', 'text-wrap': 'wrap', 'text-max-width': '80px', 'text-valign': 'center', 'text-halign': 'center'}},
@@ -95,20 +93,24 @@ default_cy_layout = {'name': 'breadthfirst', 'directed': True, 'padding': 10, 's
 # --- App Layout ---
 app.layout = html.Div([
     # Stores
-    dcc.Store(id='graph-store', data=command_manager.get_graph_data()), # Get initial data from manager
+    dcc.Store(id='graph-store', data=command_manager.get_graph_data()),
     dcc.Store(id='current-node-store', data=initial_start_node_id),
     dcc.Store(id='current-path-store', data=initial_path),
     dcc.Store(id='status-message-store', data="App loaded."),
     dcc.Store(id='editor-original-state-store', data={}),
+    dcc.Store(id='save-filename-store', data="dialogue_graph.json"),
+    dcc.Download(id="download-graph"),
 
     html.Div([ # Main container
         # Left Panel
         html.Div([
-             # --- Added Undo/Redo Buttons ---
+             # --- File/Undo/Redo Buttons Row ---
              html.Div([
+                 html.Button('Save Graph', id='save-graph-btn', n_clicks=0, style={'marginRight': '5px'}),
+                 dcc.Upload(id='upload-graph', children=html.Button('Load Graph', id='load-graph-btn'), accept='.json', multiple=False, style={'display': 'inline-block', 'marginRight': '15px'}), # Adjust margin
                  html.Button('Undo', id='undo-btn', n_clicks=0, style={'marginRight': '5px'}),
                  html.Button('Redo', id='redo-btn', n_clicks=0),
-             ], style={'marginBottom': '10px'}),
+             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px', 'paddingBottom': '10px', 'borderBottom': '1px solid #eee'}),
              # --- ---
             html.H3("Dialogue Flow"),
             html.Div(id='chat-history-display', style={'height': '300px', 'overflowY': 'scroll', 'border': '1px solid #ccc', 'marginBottom': '10px', 'padding': '5px'}),
@@ -159,7 +161,7 @@ app.layout = html.Div([
                 id='cytoscape-graph',
                 layout=default_cy_layout,
                 style={'width': '100%', 'height': '650px', 'border': '1px solid black'},
-                elements=networkx_to_cytoscape(command_manager.dialogue_graph, initial_start_node_id), # Use manager's graph
+                elements=networkx_to_cytoscape(command_manager.dialogue_graph, initial_start_node_id),
                 stylesheet=default_stylesheet,
                 zoom=default_zoom,
                 pan=default_pan
@@ -178,34 +180,26 @@ def process_command_result(result: Dict[str, Any], current_node_id: Optional[str
         'status_msg': result.get('status', 'Error: Unknown result.')
     }
     if result.get('success', False):
-        # Determine next selected node based on command hints
-        if 'affected_node' in result:
-            updates['current_node_id'] = result['affected_node']
-        elif 'new_node_id' in result:
-             updates['current_node_id'] = result['new_node_id']
-        elif 'next_selected_node' in result:
-             updates['current_node_id'] = result['next_selected_node']
-        else:
-            updates['current_node_id'] = current_node_id # Keep current selection if no hint
+        target_node_id = None
+        if 'affected_node' in result: target_node_id = result['affected_node']
+        elif 'new_node_id' in result: target_node_id = result['new_node_id']
+        elif 'next_selected_node' in result: target_node_id = result['next_selected_node']
+        else: target_node_id = current_node_id
 
-        # Attempt to update path if selection changed
-        if updates.get('current_node_id') != current_node_id:
-             new_selection = updates.get('current_node_id')
-             if new_selection:
-                 # Reconstruct graph to find path
-                 temp_dg = DialogueGraph(result.get('graph_data'))
-                 roots = temp_dg.get_root_nodes()
-                 if roots:
-                     new_path_calc = temp_dg.get_path(roots[0], new_selection)
-                     updates['current_path'] = new_path_calc if new_path_calc else [new_selection]
-                 else: # No roots, path is just the node
-                      updates['current_path'] = [new_selection]
-             else: # Selection became None (e.g., empty graph)
-                  updates['current_path'] = []
+        updates['current_node_id'] = target_node_id
+
+        if target_node_id is None:
+             updates['current_path'] = []
+        elif target_node_id != current_node_id or not current_path or current_path[-1] != target_node_id:
+             temp_dg = DialogueGraph(result.get('graph_data'))
+             roots = temp_dg.get_root_nodes()
+             if roots:
+                 new_path_calc = temp_dg.get_path(roots[0], target_node_id)
+                 updates['current_path'] = new_path_calc if new_path_calc else [target_node_id]
+             else: updates['current_path'] = [target_node_id]
         else:
-             updates['current_path'] = current_path # Path didn't change
+             updates['current_path'] = current_path
     else:
-        # If command failed, don't change selection or path
         updates['current_node_id'] = current_node_id
         updates['current_path'] = current_path
 
@@ -227,7 +221,7 @@ def process_command_result(result: Dict[str, Any], current_node_id: Optional[str
     Output('save-node-changes-btn', 'disabled'),
     Output('delete-node-btn', 'disabled'),
     Input('current-node-store', 'data'),
-    State('graph-store', 'data'), # Use graph-store as state
+    State('graph-store', 'data'),
     prevent_initial_call=True
 )
 def update_editor_area(current_node_id, graph_data):
@@ -235,9 +229,6 @@ def update_editor_area(current_node_id, graph_data):
         original_state = {}
         return "N/A", None, True, 'none', True, "", True, "", True, original_state, True, True
 
-    # Use CommandManager's graph instance (or reconstruct if needed)
-    # For read-only access like this, using the manager's instance is fine
-    # If graph_data from store is guaranteed up-to-date, reconstruct:
     dg = DialogueGraph(graph_data)
     node_data = dg.get_node_data(current_node_id)
 
@@ -264,7 +255,7 @@ def update_editor_area(current_node_id, graph_data):
     return (
         current_node_id,
         node_data.node_type.value,
-        not can_edit_type,
+        not can_edit_type, # Disable type editing for now
         speaker_type,
         not can_edit_speaker,
         speaker_name,
@@ -272,7 +263,7 @@ def update_editor_area(current_node_id, graph_data):
         current_text,
         not can_edit_text,
         original_state,
-        True, # Save disabled initially
+        True,
         not can_delete
     )
 
@@ -281,7 +272,6 @@ def update_editor_area(current_node_id, graph_data):
     Output('editor-speaker-type', 'disabled', allow_duplicate=True),
     Output('editor-speaker-name', 'disabled', allow_duplicate=True),
     Output('editor-node-text', 'disabled', allow_duplicate=True),
-    # Also update text/speaker values when type changes to PLAYER_CHOICE
     Output('editor-speaker-type', 'value', allow_duplicate=True),
     Output('editor-speaker-name', 'value', allow_duplicate=True),
     Output('editor-node-text', 'value', allow_duplicate=True),
@@ -295,16 +285,12 @@ def disable_editor_fields_on_type_change(selected_node_type_value, current_speak
     is_choice_node = selected_node_type_value == NodeType.PLAYER_CHOICE.value
     disable_speaker = is_choice_node
     disable_text = is_choice_node
-    disable_speaker_name = is_choice_node or (current_speaker_type == 'none')
-
-    # If becoming a choice node, clear/reset other fields
+    # Disable speaker name if type is choice OR if the *resulting* speaker type is none
     new_speaker_type = 'none' if is_choice_node else current_speaker_type
-    new_speaker_name = '' if is_choice_node else current_speaker_name
-    new_text = '' if is_choice_node else current_text # Clear text for choice node in editor
+    disable_speaker_name = is_choice_node or (new_speaker_type == 'none')
 
-    # Also disable speaker name if the new speaker type is none
-    if new_speaker_type == 'none':
-        disable_speaker_name = True
+    new_speaker_name = '' if is_choice_node else current_speaker_name
+    new_text = '' if is_choice_node else current_text
 
     return disable_speaker, disable_speaker_name, disable_text, new_speaker_type, new_speaker_name, new_text
 
@@ -343,7 +329,6 @@ def toggle_save_node_changes_button(new_type, new_speaker_type, new_speaker_name
     Output('status-message-store', 'data', allow_duplicate=True),
     Output('save-node-changes-btn', 'disabled', allow_duplicate=True),
     Output('editor-original-state-store', 'data', allow_duplicate=True),
-    # Potentially update current node/path if needed, but rely on main update for now
     Input('save-node-changes-btn', 'n_clicks'),
     State('current-node-store', 'data'),
     State('editor-node-type', 'value'),
@@ -356,49 +341,42 @@ def save_node_changes(n_clicks, current_node_id, node_type_val, speaker_type, sp
     if not n_clicks or not current_node_id:
         return no_update, "Save Error: No node selected.", True, no_update
 
-    # Reconstruct the updated DialogueNode object from editor values
-    try:
-        new_node_type = NodeType(node_type_val)
-    except ValueError:
-        return no_update, f"Save Error: Invalid node type '{node_type_val}'.", False, no_update
-
-    new_speaker = None
-    if new_node_type != NodeType.PLAYER_CHOICE: # Only set speaker if not choice node
-        if speaker_type == 'generic':
-            new_speaker = GenericSpeaker(identifier=speaker_name.strip() or "Default Generic")
-        elif speaker_type == 'specific':
-            new_speaker = SpecificSpeaker(name=speaker_name.strip() or "Default Specific")
-
-    # Get existing node data to preserve history etc.
     existing_node = command_manager.dialogue_graph.get_node_data(current_node_id)
     if not existing_node:
          return no_update, f"Save Error: Cannot find node {current_node_id} to update.", True, no_update
 
-    # Create the updated node object
+    try: new_node_type = NodeType(node_type_val)
+    except ValueError: return no_update, f"Save Error: Invalid node type '{node_type_val}'.", False, no_update
+
+    new_speaker = None
+    if new_node_type != NodeType.PLAYER_CHOICE:
+        if speaker_type == 'generic': new_speaker = GenericSpeaker(identifier=speaker_name.strip() or "Default Generic")
+        elif speaker_type == 'specific': new_speaker = SpecificSpeaker(name=speaker_name.strip() or "Default Specific")
+
     updated_node_data = DialogueNode(
         node_id=current_node_id,
         node_type=new_node_type,
         speaker=new_speaker,
-        # Preserve existing history, add new version if text changed
-        text_history=existing_node.text_history,
+        text_history=copy.deepcopy(existing_node.text_history),
         generation_metadata=existing_node.generation_metadata,
         custom_metadata=existing_node.custom_metadata
     )
 
-    # Add new text version if text changed and it's not a choice node
-    if new_node_type != NodeType.PLAYER_CHOICE and node_text != existing_node.current_text:
+    text_changed = False
+    # *** Clear history if becoming PLAYER_CHOICE, otherwise check for text change ***
+    if new_node_type == NodeType.PLAYER_CHOICE:
+        if updated_node_data.text_history: # Only mark change if history wasn't already empty
+            updated_node_data.text_history = []
+            text_changed = True # Consider clearing history a text change for status
+    elif node_text != existing_node.current_text:
         updated_node_data.add_text_version(node_text, source="manual_edit")
-    elif new_node_type == NodeType.PLAYER_CHOICE:
-        # Ensure text history is empty for choice nodes
-        updated_node_data.text_history = []
+        text_changed = True
 
-
-    # Create and execute the command
     command = UpdateNodeCommand(node_id=current_node_id, new_node_data=updated_node_data)
     result = command_manager.execute_command(command)
 
-    # Update original state store if successful
     new_original_state = {}
+    disable_save = True
     if result.get('success'):
         saved_speaker_type, saved_speaker_name = get_speaker_details(updated_node_data.speaker)
         new_original_state = {
@@ -407,13 +385,9 @@ def save_node_changes(n_clicks, current_node_id, node_type_val, speaker_type, sp
             'speaker_name': saved_speaker_name,
             'text': updated_node_data.current_text or ""
         }
-        # Disable save button after successful save
-        disable_save = True
     else:
-        # Keep save button enabled if save failed
         disable_save = False
-        new_original_state = State('editor-original-state-store', 'data') # Keep old original state
-
+        new_original_state = State('editor-original-state-store', 'data')
 
     return result.get('graph_data'), result.get('status'), disable_save, new_original_state
 
@@ -434,17 +408,14 @@ def save_node_changes(n_clicks, current_node_id, node_type_val, speaker_type, sp
     Output('remove-child-dropdown', 'value'),
     Output('remove-child-btn', 'disabled'),
     Output('speaker-names-list', 'children'),
-    # --- Add Undo/Redo button state outputs ---
     Output('undo-btn', 'disabled'),
     Output('redo-btn', 'disabled'),
-    # Inputs triggering the update
     Input('current-node-store', 'data'),
     Input('current-path-store', 'data'),
     Input('graph-store', 'data'),
     State('status-message-store', 'data')
 )
 def update_main_display_ui(current_node_id, current_path, graph_data, status_msg):
-    # Use the global command_manager instance to check undo/redo state
     can_undo = command_manager.can_undo()
     can_redo = command_manager.can_redo()
 
@@ -474,8 +445,8 @@ def update_main_display_ui(current_node_id, current_path, graph_data, status_msg
             updates.get('remove-child-val', default_outputs['remove-child-val']),
             updates.get('remove-child-btn', default_outputs['remove-child-btn']),
             updates.get('speaker-names-list', default_outputs['speaker-names-list']),
-            not can_undo, # undo-btn disabled state
-            not can_redo  # redo-btn disabled state
+            not can_undo,
+            not can_redo
         )
 
     if not current_node_id or not graph_data:
@@ -484,7 +455,7 @@ def update_main_display_ui(current_node_id, current_path, graph_data, status_msg
         if not roots_check:
              return make_output({'status-display': "Error: Invalid state or empty graph."})
 
-    dg = DialogueGraph(graph_data) # Reconstruct graph from store data for display logic
+    dg = DialogueGraph(graph_data)
     current_node = dg.get_node_data(current_node_id)
 
     speaker_names = dg.get_unique_speaker_names()
@@ -539,6 +510,7 @@ def update_main_display_ui(current_node_id, current_path, graph_data, status_msg
         node_to_link = dg.get_node_data(nid)
         if not node_to_link: continue
         if not dg.is_reachable(nid, current_node_id):
+            # *** Update label generation for link dropdown ***
             if node_to_link.node_type == NodeType.PLAYER_CHOICE: label_text = "[PLAYER CHOICE]"
             else: label_text = node_to_link.current_text[:15] if node_to_link.current_text else "[Empty]"
             label = f"{nid[:6]}... ({label_text}...)"
@@ -547,7 +519,7 @@ def update_main_display_ui(current_node_id, current_path, graph_data, status_msg
     outputs['link-child-dropdown-val'] = None
 
     current_children = dg.get_children(current_node_id)
-    outputs['remove-child-opts'] = [{'label': f"{cid[:6]}... ({dg.get_node_data(cid).current_text[:15] if dg.get_node_data(cid) and dg.get_node_data(cid).current_text else 'Choice/Empty'}...)", 'value': cid}
+    outputs['remove-child-opts'] = [{'label': f"{cid[:6]}... ({dg.get_node_data(cid).current_text[:15] if dg.get_node_data(cid) and dg.get_node_data(cid).current_text else '[CHOICE]' if dg.get_node_data(cid) and dg.get_node_data(cid).node_type == NodeType.PLAYER_CHOICE else '[Empty]'}...)", 'value': cid}
                                      for cid in current_children]
     outputs['remove-child-val'] = None
     outputs['remove-child-btn'] = not bool(current_children)
@@ -601,7 +573,7 @@ def handle_navigation(prev_clicks, next_clicks, up_clicks, graph_data, current_n
     if not triggered_id or not graph_data or not current_node_id:
         return no_update, no_update, "Navigation Error: Invalid state."
 
-    dg = DialogueGraph(graph_data) # Reconstruct for read operations
+    dg = DialogueGraph(graph_data)
     node = dg.get_node_data(current_node_id)
     if not node: return no_update, no_update, f"Navigation Error: Node {current_node_id} not found."
 
@@ -717,7 +689,7 @@ def add_new_child(n_clicks, current_node_id, current_path):
     if not parent_node:
         return no_update, f"Error: Parent node {current_node_id} not found.", no_update, no_update
 
-    # Determine defaults based on parent
+    # Determine defaults for new node
     if parent_node.node_type == NodeType.PLAYER_CHOICE:
         new_speaker = player
         new_node_type = NodeType.NPC_LINE
@@ -731,7 +703,6 @@ def add_new_child(n_clicks, current_node_id, current_path):
     command = AddNodeCommand(parent_id=current_node_id, new_node_data=new_node_data)
     result = command_manager.execute_command(command)
 
-    # Process result to update UI state
     processed_state = process_command_result(result, current_node_id, current_path)
 
     return (
@@ -755,7 +726,6 @@ def link_existing_child(n_clicks, current_node_id, child_to_link_id):
     if not n_clicks or not current_node_id or not child_to_link_id:
         return no_update, "Error: Missing information to link child."
 
-    # Create and execute command
     command = AddEdgeCommand(parent_id=current_node_id, child_id=child_to_link_id)
     result = command_manager.execute_command(command)
 
@@ -775,7 +745,6 @@ def remove_selected_child_link(n_clicks, current_node_id, child_to_remove_id):
     if not n_clicks or not current_node_id or not child_to_remove_id:
         return no_update, "Error: Missing information to remove child link."
 
-    # Create and execute command
     command = RemoveEdgeCommand(parent_id=current_node_id, child_id=child_to_remove_id)
     result = command_manager.execute_command(command)
 
@@ -789,18 +758,16 @@ def remove_selected_child_link(n_clicks, current_node_id, child_to_remove_id):
     Output('status-message-store', 'data', allow_duplicate=True),
     Input('delete-node-btn', 'n_clicks'),
     State('current-node-store', 'data'),
-    State('current-path-store', 'data'), # Pass current path for context
+    State('current-path-store', 'data'),
     prevent_initial_call=True
 )
 def delete_selected_node(n_clicks, node_to_delete_id, current_path):
     if not n_clicks or not node_to_delete_id:
         return no_update, no_update, no_update, "Error: Cannot delete node."
 
-    # Create and execute command
     command = DeleteNodeCommand(node_id=node_to_delete_id)
     result = command_manager.execute_command(command)
 
-    # Process result to update UI state
     processed_state = process_command_result(result, node_to_delete_id, current_path)
 
     return (
@@ -817,7 +784,7 @@ def delete_selected_node(n_clicks, node_to_delete_id, current_path):
     Output('current-path-store', 'data', allow_duplicate=True),
     Output('status-message-store', 'data', allow_duplicate=True),
     Input('cytoscape-graph', 'tapNodeData'),
-    State('graph-store', 'data'), # Use graph-store for read-only access
+    State('graph-store', 'data'),
     prevent_initial_call=True
 )
 def display_tap_node_data(node_data, graph_data):
@@ -825,7 +792,6 @@ def display_tap_node_data(node_data, graph_data):
         return no_update, no_update, no_update
 
     clicked_node_id = node_data['id']
-    # Reconstruct graph temporarily for path finding
     dg = DialogueGraph(graph_data)
     roots = dg.get_root_nodes()
     new_path = []
@@ -833,12 +799,11 @@ def display_tap_node_data(node_data, graph_data):
 
     if roots:
         path_calc = dg.get_path(roots[0], clicked_node_id)
-        if path_calc:
-            new_path = path_calc
+        if path_calc: new_path = path_calc
         else:
-            new_path = [clicked_node_id] # Path not found, just select node
+            new_path = [clicked_node_id]
             status_msg += " (Path from root not found)"
-    else: # No roots
+    else:
         new_path = [clicked_node_id]
         status_msg += " (No root node found)"
 
@@ -848,14 +813,19 @@ def display_tap_node_data(node_data, graph_data):
 @callback(
     Output('cytoscape-graph', 'zoom', allow_duplicate=True),
     Output('cytoscape-graph', 'pan', allow_duplicate=True),
-    Output('cytoscape-graph', 'layout', allow_duplicate=True),
+    # *** Outputting elements forces re-render, which helps reset view ***
+    Output('cytoscape-graph', 'elements', allow_duplicate=True),
     Input('reset-view-btn', 'n_clicks'),
+    State('graph-store', 'data'), # Need current graph data to redraw elements
+    State('current-node-store', 'data'), # Need current node for redraw
     prevent_initial_call=True
 )
-def reset_graph_view(n_clicks):
-    if n_clicks:
-        # Return default zoom, pan, and trigger layout reset
-        return default_zoom, default_pan, default_cy_layout
+def reset_graph_view(n_clicks, graph_data, current_node_id):
+    if n_clicks and graph_data:
+        # Re-render elements and set default zoom/pan
+        dg = DialogueGraph(graph_data)
+        elements = networkx_to_cytoscape(dg, current_node_id)
+        return default_zoom, default_pan, elements
     return no_update, no_update, no_update
 
 # --- Undo/Redo Callbacks ---
@@ -903,12 +873,61 @@ def handle_redo(n_clicks, current_node_id, current_path):
         )
     return no_update, no_update, no_update, no_update
 
+# --- Save/Load Callbacks ---
+@callback(
+    Output("download-graph", "data"),
+    Input("save-graph-btn", "n_clicks"),
+    State("graph-store", "data"),
+    State("save-filename-store", "data"),
+    prevent_initial_call=True,
+)
+def save_graph_data(n_clicks, graph_data, filename):
+    if n_clicks and graph_data:
+        save_filename = filename if filename and filename.endswith(".json") else "dialogue_graph.json"
+        json_string = json.dumps(graph_data, indent=2)
+        return dict(content=json_string, filename=save_filename)
+    return dash.no_update
+
+@callback(
+    Output('graph-store', 'data', allow_duplicate=True),
+    Output('current-node-store', 'data', allow_duplicate=True),
+    Output('current-path-store', 'data', allow_duplicate=True),
+    Output('status-message-store', 'data', allow_duplicate=True),
+    Output('undo-btn', 'disabled', allow_duplicate=True),
+    Output('redo-btn', 'disabled', allow_duplicate=True),
+    Input('upload-graph', 'contents'),
+    State('upload-graph', 'filename'),
+    prevent_initial_call=True,
+)
+def load_graph_data(contents, filename):
+    if contents is not None:
+        content_type, content_string = contents.split(',')
+        decoded = base64.b64decode(content_string)
+        try:
+            if 'json' in filename:
+                loaded_data = json.loads(decoded.decode('utf-8'))
+                if isinstance(loaded_data, dict) and 'nodes' in loaded_data and 'links' in loaded_data:
+                    # Reset Command Manager with the new graph state
+                    command_manager.__init__(DialogueGraph(loaded_data)) # Clears undo/redo
+
+                    new_dg = command_manager.dialogue_graph
+                    new_roots = new_dg.get_root_nodes()
+                    new_node_id = new_roots[0] if new_roots else None
+                    new_path = [new_node_id] if new_node_id else []
+
+                    status = f"Loaded graph from {filename}. Undo/Redo history cleared."
+                    return loaded_data, new_node_id, new_path, status, True, True # Disable undo/redo
+                else:
+                    return no_update, no_update, no_update, "Error: Invalid JSON graph format.", no_update, no_update
+            else:
+                return no_update, no_update, no_update, f"Error: Invalid file type '{filename}'. Please upload JSON.", no_update, no_update
+        except Exception as e:
+            print(e)
+            return no_update, no_update, no_update, f"Error processing file: {e}", no_update, no_update
+
+    return no_update, no_update, no_update, no_update, no_update, no_update
+
 
 # --- Run the App ---
-# Note: The CommandManager instance is global in this simple setup.
-# For more complex apps, consider passing it via Flask context or other DI methods.
 if __name__ == '__main__':
-    # Ensure initial graph state is loaded into the manager if needed
-    # command_manager = CommandManager(DialogueGraph(initial_graph_data_if_loaded_from_file))
     app.run(debug=True)
-

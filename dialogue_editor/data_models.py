@@ -113,7 +113,7 @@ class DialogueGraph:
     def __init__(self, graph_data=None):
         if graph_data:
             if isinstance(graph_data, dict) and 'nodes' in graph_data and 'links' in graph_data:
-                 try: self.graph = nx.node_link_graph(graph_data, directed=True, multigraph=False)
+                 try: self.graph = nx.node_link_graph(graph_data, directed=True, multigraph=False, edges="links")
                  except Exception as e: self.graph = nx.DiGraph()
             else: self.graph = nx.DiGraph()
         else: self.graph = nx.DiGraph()
