@@ -1,0 +1,287 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "node_type": "NPC_LINE",
+      "speaker": {
+        "type": "specific",
+        "name": "Narrator"
+      },
+      "text_history": [
+        {
+          "text": "Start of the dialogue.",
+          "timestamp": "2025-05-01T01:30:30.623885+00:00",
+          "source": "manual",
+          "metadata": null
+        }
+      ],
+      "generation_metadata": {},
+      "custom_metadata": {},
+      "id": "root"
+    },
+    {
+      "node_type": "NPC_LINE",
+      "speaker": {
+        "type": "specific",
+        "name": "New NPC"
+      },
+      "text_history": [
+        {
+          "text": "New node (child of root)",
+          "timestamp": "2025-05-01T01:31:07.224152+00:00",
+          "source": "placeholder",
+          "metadata": null
+        },
+        {
+          "text": "Hello, stranger!",
+          "timestamp": "2025-05-01T01:31:17.692723+00:00",
+          "source": "manual_edit",
+          "metadata": null
+        }
+      ],
+      "generation_metadata": {},
+      "custom_metadata": {},
+      "id": "a84fa87a-a74b-4aa4-80f8-147f3e07a6ce"
+    },
+    {
+      "node_type": "PLAYER_CHOICE",
+      "speaker": null,
+      "text_history": [],
+      "generation_metadata": {},
+      "custom_metadata": {},
+      "id": "b1944e5c-84c2-47f2-85d0-910fb8d82b68"
+    },
+    {
+      "node_type": "NPC_LINE",
+      "speaker": {
+        "type": "generic",
+        "identifier": "Player"
+      },
+      "text_history": [
+        {
+          "text": "New node (child of b1944e)",
+          "timestamp": "2025-05-01T01:31:34.091140+00:00",
+          "source": "placeholder",
+          "metadata": null
+        },
+        {
+          "text": "Hey!",
+          "timestamp": "2025-05-01T01:31:40.925420+00:00",
+          "source": "manual_edit",
+          "metadata": null
+        }
+      ],
+      "generation_metadata": {},
+      "custom_metadata": {},
+      "id": "24b8257d-8aab-4911-bff4-4c93df612672"
+    },
+    {
+      "node_type": "NPC_LINE",
+      "speaker": {
+        "type": "generic",
+        "identifier": "Player"
+      },
+      "text_history": [
+        {
+          "text": "New node (child of b1944e)",
+          "timestamp": "2025-05-01T01:31:48.343024+00:00",
+          "source": "placeholder",
+          "metadata": null
+        },
+        {
+          "text": "Howdy!",
+          "timestamp": "2025-05-01T01:31:57.279881+00:00",
+          "source": "manual_edit",
+          "metadata": null
+        }
+      ],
+      "generation_metadata": {},
+      "custom_metadata": {},
+      "id": "241b035e-64a0-4232-8f8c-7dcdf2894f9a"
+    },
+    {
+      "node_type": "NPC_LINE",
+      "speaker": {
+        "type": "generic",
+        "identifier": "Player"
+      },
+      "text_history": [
+        {
+          "text": "New node (child of b1944e)",
+          "timestamp": "2025-05-01T01:32:26.944190+00:00",
+          "source": "placeholder",
+          "metadata": null
+        },
+        {
+          "text": "Uh, hello?",
+          "timestamp": "2025-05-01T01:32:35.480656+00:00",
+          "source": "manual_edit",
+          "metadata": null
+        }
+      ],
+      "generation_metadata": {},
+      "custom_metadata": {},
+      "id": "9cb655dc-fd16-454a-8b57-d41966f4a7c1"
+    },
+    {
+      "node_type": "NPC_LINE",
+      "speaker": {
+        "type": "generic",
+        "identifier": "Joe Random"
+      },
+      "text_history": [
+        {
+          "text": "New node (child of 9cb655)",
+          "timestamp": "2025-05-01T01:32:39.692186+00:00",
+          "source": "placeholder",
+          "metadata": null
+        },
+        {
+          "text": "I need your help!",
+          "timestamp": "2025-05-01T01:32:58.459603+00:00",
+          "source": "manual_edit",
+          "metadata": null
+        }
+      ],
+      "generation_metadata": {},
+      "custom_metadata": {},
+      "id": "9c770bfd-39a8-43a5-950d-2163ac4fb94b"
+    },
+    {
+      "node_type": "PLAYER_CHOICE",
+      "speaker": null,
+      "text_history": [],
+      "generation_metadata": {},
+      "custom_metadata": {},
+      "id": "d1b6c4b6-4094-4e11-b739-a90a3c03b183"
+    },
+    {
+      "node_type": "NPC_LINE",
+      "speaker": {
+        "type": "generic",
+        "identifier": "Player"
+      },
+      "text_history": [
+        {
+          "text": "New node (child of d1b6c4)",
+          "timestamp": "2025-05-01T01:39:54.779419+00:00",
+          "source": "placeholder",
+          "metadata": null
+        },
+        {
+          "text": "Who doesn't?",
+          "timestamp": "2025-05-01T01:40:04.463815+00:00",
+          "source": "manual_edit",
+          "metadata": null
+        }
+      ],
+      "generation_metadata": {},
+      "custom_metadata": {},
+      "id": "b9cbdc59-acd5-42cf-a093-64ab32f4852c"
+    },
+    {
+      "node_type": "NPC_LINE",
+      "speaker": {
+        "type": "generic",
+        "identifier": "Player"
+      },
+      "text_history": [
+        {
+          "text": "New node (child of d1b6c4)",
+          "timestamp": "2025-05-01T01:40:10.680303+00:00",
+          "source": "placeholder",
+          "metadata": null
+        },
+        {
+          "text": "You do?",
+          "timestamp": "2025-05-01T01:40:19.097592+00:00",
+          "source": "manual_edit",
+          "metadata": null
+        }
+      ],
+      "generation_metadata": {},
+      "custom_metadata": {},
+      "id": "7ad6229b-b9ae-40f1-b6eb-48354b33b137"
+    },
+    {
+      "node_type": "NPC_LINE",
+      "speaker": {
+        "type": "generic",
+        "identifier": "Joe Random"
+      },
+      "text_history": [
+        {
+          "text": "New node (child of 7ad622)",
+          "timestamp": "2025-05-01T01:40:22.012786+00:00",
+          "source": "placeholder",
+          "metadata": null
+        },
+        {
+          "text": "It's imperative!",
+          "timestamp": "2025-05-01T01:40:45.662785+00:00",
+          "source": "manual_edit",
+          "metadata": null
+        }
+      ],
+      "generation_metadata": {},
+      "custom_metadata": {},
+      "id": "2c5d293f-8df6-4b38-88b1-a1a12e08e600"
+    }
+  ],
+  "links": [
+    {
+      "source": "root",
+      "target": "a84fa87a-a74b-4aa4-80f8-147f3e07a6ce"
+    },
+    {
+      "source": "a84fa87a-a74b-4aa4-80f8-147f3e07a6ce",
+      "target": "b1944e5c-84c2-47f2-85d0-910fb8d82b68"
+    },
+    {
+      "source": "b1944e5c-84c2-47f2-85d0-910fb8d82b68",
+      "target": "24b8257d-8aab-4911-bff4-4c93df612672"
+    },
+    {
+      "source": "b1944e5c-84c2-47f2-85d0-910fb8d82b68",
+      "target": "241b035e-64a0-4232-8f8c-7dcdf2894f9a"
+    },
+    {
+      "source": "b1944e5c-84c2-47f2-85d0-910fb8d82b68",
+      "target": "9cb655dc-fd16-454a-8b57-d41966f4a7c1"
+    },
+    {
+      "source": "24b8257d-8aab-4911-bff4-4c93df612672",
+      "target": "9c770bfd-39a8-43a5-950d-2163ac4fb94b"
+    },
+    {
+      "source": "241b035e-64a0-4232-8f8c-7dcdf2894f9a",
+      "target": "9c770bfd-39a8-43a5-950d-2163ac4fb94b"
+    },
+    {
+      "source": "9cb655dc-fd16-454a-8b57-d41966f4a7c1",
+      "target": "9c770bfd-39a8-43a5-950d-2163ac4fb94b"
+    },
+    {
+      "source": "9c770bfd-39a8-43a5-950d-2163ac4fb94b",
+      "target": "d1b6c4b6-4094-4e11-b739-a90a3c03b183"
+    },
+    {
+      "source": "d1b6c4b6-4094-4e11-b739-a90a3c03b183",
+      "target": "b9cbdc59-acd5-42cf-a093-64ab32f4852c"
+    },
+    {
+      "source": "d1b6c4b6-4094-4e11-b739-a90a3c03b183",
+      "target": "7ad6229b-b9ae-40f1-b6eb-48354b33b137"
+    },
+    {
+      "source": "b9cbdc59-acd5-42cf-a093-64ab32f4852c",
+      "target": "2c5d293f-8df6-4b38-88b1-a1a12e08e600"
+    },
+    {
+      "source": "7ad6229b-b9ae-40f1-b6eb-48354b33b137",
+      "target": "2c5d293f-8df6-4b38-88b1-a1a12e08e600"
+    }
+  ]
+}
